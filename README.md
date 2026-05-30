@@ -1,12 +1,25 @@
 # prompt-redact
 
-An on-prem PII/PHI redaction proxy that sits between chat clients and an LLM backend. The proxy strips identifiers from user prompts before they reach the model and rehydrates them in the model's response, so the LLM never sees raw patient data while the user still gets a readable answer.
+An on-prem PII redaction proxy that sits between chat clients and an LLM backend. The proxy strips identifiers from user prompts before they reach the model and rehydrates them in the model's response, so the LLM never sees raw personal data while the user still gets a readable answer.
 
 > **Status:** Design and planning. No implementation yet. See [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) and [`docs/PLAN.html`](docs/PLAN.html).
 
 ## Why
 
-Healthcare chat surfaces routinely receive prompts containing PHI (names, DOBs, MRNs, phone numbers). Sending that text directly to an LLM — especially a hosted one — creates HIPAA exposure. A redaction proxy intercepts the prompt, anonymizes identifiers in-place, forwards only the anonymized text, and reverses the substitution on the way back to the user.
+Chat surfaces in regulated industries routinely receive prompts containing identifiers that must not leak to a third-party LLM. The exact category and the exact regulator change by domain, but the shape of the problem is the same:
+
+| Domain | Examples of identifiers | Driving regime(s) |
+|---|---|---|
+| Healthcare | Patient names, DOBs, MRNs, ICD/CPT codes, clinical narratives | HIPAA (Safe Harbor / Expert Determination) |
+| Finance | Account numbers, card PANs, SSNs, balances, transaction histories | PCI-DSS, GLBA, SOX, state privacy laws |
+| Pharma & clinical research | Subject IDs, trial site codes, adverse-event narratives | HIPAA + GxP + sponsor data-use agreements |
+| Legal & professional services | Client names, matter numbers, privileged content | Attorney–client privilege, bar association rules |
+| Cross-border / EU | Anything that qualifies as personal data | GDPR, UK GDPR, regional equivalents |
+| Public sector & education | Citizen records, case files, student records | Privacy Act, FERPA, state equivalents |
+
+Sending that text directly to an LLM — especially a hosted one — creates compliance exposure regardless of which regime applies. A redaction proxy intercepts the prompt, anonymizes identifiers in-place, forwards only the anonymized text, and reverses the substitution on the way back to the user.
+
+> Throughout the design docs, healthcare/HIPAA appears as the most prescriptive example (it's the regime with the most specific entity list — the [Safe Harbor identifier list](https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/index.html)). The architecture and threat model are not healthcare-specific; the entity set the redactor catches is configurable per deployment.
 
 ## Shape of the system
 
@@ -28,7 +41,7 @@ The proxy exposes an **OpenAI-compatible `/v1/chat/completions`** endpoint so ex
 
 | Decision | Choice |
 |---|---|
-| Hosting | On-prem / self-hosted only (HIPAA) |
+| Hosting | On-prem / self-hosted only (no third-party APIs in the redaction path — required for HIPAA, PCI-DSS, GDPR-strict, and similar regimes) |
 | Redaction engine | [Microsoft Presidio](https://github.com/microsoft/presidio) |
 | Public API | OpenAI-compatible chat completions |
 | Reversibility | Reversible via per-request token map |
