@@ -1,0 +1,11 @@
+# Language-specific ignores will be added once the implementation language is picked (see docs/PLAN.md M0).
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
