@@ -2,7 +2,7 @@
 
 An on-prem PII/PHI redaction proxy that sits between chat clients and an LLM backend. The proxy strips identifiers from user prompts before they reach the model and rehydrates them in the model's response, so the LLM never sees raw patient data while the user still gets a readable answer.
 
-> **Status:** Design and planning. No implementation yet. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/PLAN.md`](docs/PLAN.md).
+> **Status:** Design and planning. No implementation yet. See [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) and [`docs/PLAN.html`](docs/PLAN.html).
 
 ## Why
 
@@ -34,12 +34,15 @@ The proxy exposes an **OpenAI-compatible `/v1/chat/completions`** endpoint so ex
 | Reversibility | Reversible via per-request token map |
 | Implementation language | **TBD** — Presidio is Python, so the realistic options are full-Python or Presidio-as-sidecar + proxy in another language |
 
-Cloud DLP (GCP / AWS Macie) and Philter were considered and deferred. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#alternatives-considered).
+Cloud DLP (GCP / AWS Macie) and Philter were considered and deferred. See [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html#alternatives-considered).
 
 ## Docs
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — components, data flow, threat model, alternatives, open questions
-- [`docs/PLAN.md`](docs/PLAN.md) — milestones from M0 (design freeze) through MVP and beyond
+Project documentation under `docs/` is authored in HTML, not markdown (see [`CLAUDE.md`](CLAUDE.md#documentation-format)). Markdown is reserved for `README.md`, `CLAUDE.md`, and `skills/*/SKILL.md`.
+
+- [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) — components, data flow, threat model, redaction quality targets, deployment-target sketch, alternatives, open questions
+- [`docs/PLAN.html`](docs/PLAN.html) — milestones from M0 (design freeze) through MVP and beyond
+- [`docs/decisions/0001-language-and-topology.html`](docs/decisions/0001-language-and-topology.html) — ADR (status: Proposed) for the language and process-topology decision
 - [`CLAUDE.md`](CLAUDE.md) — instructions for Claude Code when working in this repo
 - [`skills/karpathy-guidelines/SKILL.md`](skills/karpathy-guidelines/SKILL.md) — vendored coding guidelines
 

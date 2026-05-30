@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ADR 0001 — Implementation language and process topology</title>
+</head>
+<body>
+
+<h1>ADR 0001 — Implementation language and process topology</h1>
+
+<ul>
+  <li><strong>Status:</strong> Proposed <em>(awaiting decision)</em></li>
+  <li><strong>Date opened:</strong> 2026-05-30</li>
+  <li><strong>Owners:</strong> rick-johnn</li>
+  <li><strong>Supersedes:</strong> —</li>
+  <li><strong>Superseded by:</strong> —</li>
+</ul>
+
+<h2>Context</h2>
+
+<p><code>prompt-redact</code> is a redaction proxy that sits between chat clients and an LLM backend. Earlier M0 decisions locked Microsoft Presidio as the redaction engine and an OpenAI-compatible API as the public surface.</p>
+
+<p>Presidio is a <strong>Python-only library</strong>. That single fact narrows the topology decision to a small number of viable shapes, and every other code-level choice (HTTP framework, test framework, container layout, deployment story) follows from it. We therefore need to make this decision deliberately, not by drift.</p>
+
+<p>This decision is intentionally kept open until the missing inputs below are answered. The doc presents the options and tradeoffs; it does not pick.</p>
+
+<h2>Inputs we don't have yet</h2>
+
+<p>These will dominate the right answer:</p>
+<ol>
+  <li><strong>Team's primary language(s)</strong> and on-call ergonomics. A &ldquo;best&rdquo; stack the on-call rotation can't debug at 2am is the wrong stack.</li>
+  <li><strong>Expected throughput and latency budget.</strong> Order-of-magnitude estimate of peak chat req/s per pod, and the acceptable proxy-added p95 latency.</li>
+  <li><strong>Existing deployment conventions.</strong> Do we already run Python services? Is there an established sidecar pattern? A service mesh we'd plug into?</li>
+  <li><strong>Future surface.</strong> Is this only ever a redaction proxy, or will it grow to include evaluation harnesses, audit log pipelines, batch redaction jobs, embeddings endpoints? Python's NLP ecosystem (spaCy, HuggingFace, datasets) becomes increasingly valuable as scope grows.</li>
+</ol>
+
+<h2>Criteria</h2>
+
+<table>
+  <thead>
+    <tr><th>Criterion</th><th>Why it matters here</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Presidio integration cost</td><td>Either in-process (Python) or over IPC (anything else). IPC adds a contract, a deploy unit, and a failure mode.</td></tr>
+    <tr><td>Operational simplicity</td><td>One image vs two. Fewer moving parts = easier audit, which matters under HIPAA.</td></tr>
+    <tr><td>Performance envelope</td><td>The bottleneck on a chat request is the LLM call (hundreds of ms to seconds), then the NER pass (tens of ms). The proxy shell itself is rarely the long pole.</td></tr>
+    <tr><td>Team familiarity</td><td>Highest-leverage factor for velocity and maintainability.</td></tr>
+    <tr><td>Container size &amp; cold start</td><td>spaCy/transformer model loading drives image size and warm-up time. Affects every container in the system.</td></tr>
+    <tr><td>Audit/compliance surface</td><td>More services = more boundaries to threat-model, more secrets to rotate.</td></tr>
+  </tbody>
+</table>
+
+<h2>Options</h2>
+
+<h3>Option A — Full Python (single service)</h3>
+<p>A single async Python service hosts the HTTP proxy and the Presidio analyzer in-process.</p>
+<p><strong>Likely stack:</strong> FastAPI or Starlette or LiteStar, <code>httpx</code> for upstream calls, <code>pytest</code> for tests, <code>uv</code> or <code>poetry</code> for deps.</p>
+<table>
+  <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
+  <tbody>
+    <tr><td>Zero IPC — call Presidio as a library</td><td>Python perf ceiling (GIL); concurrent NER calls block within a worker</td></tr>
+    <tr><td>One container, one deploy, one set of logs</td><td>Image size dominated by spaCy/transformer model</td></tr>
+    <tr><td>Trivially matches Presidio's own update cadence</td><td>Cold start = model load time (seconds)</td></tr>
+    <tr><td>Smallest team surface; easiest to audit</td><td>If team has zero Python on-call expertise, this is the wrong choice</td></tr>
+    <tr><td>Python's NLP ecosystem available for future scope</td><td>—</td></tr>
+  </tbody>
+</table>
+<p><strong>Best when:</strong> Team is Python-comfortable, expected throughput per pod is modest (≤ ~100 req/s), no extreme latency-floor requirement.</p>
+
+<h3>Option B — Go proxy + Python Presidio sidecar</h3>
+<p>A Go HTTP proxy handles the request/response surface and calls a Python process exposing a small gRPC or HTTP-over-loopback API for redaction.</p>
+<table>
+  <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
+  <tbody>
+    <tr><td>Fastest proxy hot path; tiny proxy binary</td><td>Two languages, two deploy units, two CI pipelines</td></tr>
+    <tr><td>Goroutine concurrency for the proxy shell</td><td>New IPC boundary needs its own threat model (loopback only? mutual TLS?)</td></tr>
+    <tr><td>Clean separation of concerns</td><td>Local dev story is more complex</td></tr>
+    <tr><td>Easy horizontal scaling of just the proxy</td><td>Saves at most a few ms in the proxy shell while LLM dominates</td></tr>
+  </tbody>
+</table>
+<p><strong>Best when:</strong> Team has real Go expertise, expecting very high throughput, or the proxy will sit alongside an existing Go-heavy service stack.</p>
+
+<h3>Option C — Node/TypeScript proxy + Python sidecar</h3>
+<p>Same shape as Option B but with a Node proxy.</p>
+<table>
+  <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
+  <tbody>
+    <tr><td>Plays well if the consuming stack is already Node/TS</td><td>Two languages, same as Option B</td></tr>
+    <tr><td>Streaming SSE story is well-trodden in Node</td><td>Node perf &lt; Go for the proxy shell</td></tr>
+    <tr><td>Strong types via TS catch contract drift early</td><td>Same two-deploy operational cost</td></tr>
+  </tbody>
+</table>
+<p><strong>Best when:</strong> Team is JS/TS-first; the chat surface itself is also Node, making a single deployable hard.</p>
+
+<h3>Option D — Rust proxy + Python sidecar</h3>
+<p>Same shape, with Rust.</p>
+<table>
+  <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
+  <tbody>
+    <tr><td>Lowest overhead, smallest binary, sharpest tail latency</td><td>Steepest learning curve, longest dev cycle</td></tr>
+    <tr><td>Strong correctness guarantees</td><td>Overkill for chat-rate traffic when the LLM dominates</td></tr>
+    <tr><td>Excellent for embedded/edge deployments</td><td>Slowest path to v1</td></tr>
+  </tbody>
+</table>
+<p><strong>Best when:</strong> Truly perf-critical or on-device scenarios where binary size and tail latency matter.</p>
+
+<h3>Option E — Drop Presidio</h3>
+<p>Reopen the engine decision so we're free to pick a non-Python stack without the IPC tax.</p>
+<table>
+  <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
+  <tbody>
+    <tr><td>Free language choice</td><td>Lose Presidio's recognizer ecosystem and community</td></tr>
+    <tr><td>If Philter (JVM) is acceptable, Java/Kotlin proxy becomes viable</td><td>Engine pick was made for good reasons; re-litigating costs time</td></tr>
+    <tr><td>Regex-only first cut is also possible if the team accepts the recall hit</td><td>A regex-only engine almost certainly fails the recall bar for HIPAA Safe Harbor</td></tr>
+  </tbody>
+</table>
+<p><strong>Best when:</strong> The team has a hard non-Python constraint that outweighs Presidio's value, OR the recall bar is low enough that a simpler engine suffices (it almost certainly is not).</p>
+
+<h2>Honest take (lean, not a decision)</h2>
+
+<p>For chat-rate traffic (likely well under 100 req/s per pod) and the latency profile of an LLM call, the proxy shell is not the bottleneck — the LLM call is, and the NER pass is the next-most-expensive thing. Both are bounded by Python. Switching to Go or Rust gains you a few ms in the proxy shell while paying for two languages, two deploys, and a new IPC boundary that needs auditing.</p>
+
+<p><strong>The default that fits the constraints is Option A — full Python.</strong> The cases where another option clearly wins are:</p>
+<ul>
+  <li>Team has zero Python operational experience → Option B/C/D, picked by team familiarity</li>
+  <li>Throughput is expected to be in the thousands of req/s per pod → Option B</li>
+  <li>Already a Node-heavy stack with strong reasons not to deploy a Python service → Option C</li>
+</ul>
+<p>If none of those apply, Option A is the simpler answer.</p>
+
+<h2>Consequences (whichever way we go)</h2>
+
+<p>Locking this decision will:</p>
+<ul>
+  <li>Pin the HTTP framework, test framework, and HTTP client choices in <a href="../ARCHITECTURE.html">ARCHITECTURE.html</a></li>
+  <li>Determine the contents of <code>.gitignore</code></li>
+  <li>Determine the Dockerfile shape and base image</li>
+  <li>Determine whether M5 deploys one container or two</li>
+  <li>Determine whether the IPC boundary in Options B/C/D becomes a new row in the threat-model table</li>
+</ul>
+<p>Reversing this decision after M2 (proxy MVP shipped) would be a significant rewrite — the cost grows with each milestone that compounds on top of the choice.</p>
+
+<h2>Decision</h2>
+
+<p>— <em>(to be filled in once stakeholders weigh in on the missing inputs above)</em></p>
+
+<h2>References</h2>
+<ul>
+  <li><a href="../ARCHITECTURE.html">ARCHITECTURE.html</a> — &ldquo;Implementation stack — TBD&rdquo; table and open question #0</li>
+  <li><a href="../PLAN.html">PLAN.html</a> — M0 checklist</li>
+  <li>Presidio: <a href="https://github.com/microsoft/presidio">https://github.com/microsoft/presidio</a></li>
+</ul>
+
+</body>
+</html>
