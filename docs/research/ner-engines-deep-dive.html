@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Research: NER engines deep-dive (spaCy, Presidio, ONNX, alternatives)</title>
+</head>
+<body>
+
+<h1>NER engines deep-dive</h1>
+
+<p><em>Research note, not a decision. Supports <a href="../decisions/0001-language-and-topology.html">ADR 0001</a> and any future engine-reconsideration ADR. Numbers cited below come from published benchmarks and prior knowledge; treat them as good-enough-to-decide-whether-to-spike, not as production figures. Where exact numbers would lock a decision, the recommendation is to benchmark on the project's own input distribution.</em></p>
+
+<h2>Why this doc exists</h2>
+
+<p>The conversation between &ldquo;Python + Presidio&rdquo; and &ldquo;Rust + ONNX&rdquo; surfaced a comparison (~25–50 ms vs ~5–15 ms p95) that needs interrogation:</p>
+
+<ol>
+  <li>Are those numbers credible? What's actually inside each stack?</li>
+  <li>Is the gap meaningful in this product's call pattern, or is it noise?</li>
+  <li>Is the choice binary, or is there a sensible &ldquo;offer both&rdquo; design?</li>
+</ol>
+
+<p>This document goes deeper into each technology, then re-frames the speed comparison around how the service is actually used.</p>
+
+<h2>spaCy</h2>
+
+<h3>What it is</h3>
+
+<p><a href="https://spacy.io">spaCy</a> is an industrial-strength NLP library built by Explosion AI (Matthew Honnibal and Ines Montani). It has been the default production-grade NLP toolkit in Python since roughly 2016. It is Cython-backed (most hot paths drop to C), opinionated about pipelines, and tuned for batch throughput on CPU.</p>
+
+<p>A spaCy pipeline is a sequence of components — tokenizer, tagger, parser, NER, lemmatizer, attribute ruler — that run in order on each doc. Each component is independently swappable. For redaction, only the tokenizer and the NER component matter; the rest can be disabled to cut latency.</p>
+
+<h3>How spaCy NER works</h3>
+
+<p>spaCy's CPU-targeted NER uses a transition-based parser with the BILUO tagging scheme (Begin, Inside, Last, Unit, Outside). For each token, a small feed-forward network — trained on top of a bloom-embedding-based feature extractor — predicts the next transition. A beam search keeps the top hypotheses. Compared to a transformer's full attention pass, this is dramatically cheaper per token, at some accuracy cost.</p>
+
+<p>The transformer variant (<code>*_trf</code> models) replaces the cheap feature extractor with a HuggingFace transformer (RoBERTa-based by default). Accuracy goes up; CPU latency goes up substantially.</p>
+
+<h3>Model lineup (English)</h3>
+
+<table>
+  <thead>
+    <tr><th>Model</th><th>Size on disk</th><th>NER F1 (OntoNotes 5)</th><th>CPU latency, 500 tokens</th><th>When to use</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>en_core_web_sm</code></td><td>~12 MB</td><td>~85%</td><td>~5–15 ms</td><td>Constrained envs; baseline only</td></tr>
+    <tr><td><code>en_core_web_md</code></td><td>~40 MB</td><td>~89%</td><td>~10–25 ms</td><td>Marginal upgrade; usually skip in favor of <code>lg</code></td></tr>
+    <tr><td><code>en_core_web_lg</code></td><td>~560 MB</td><td>~91%</td><td>~15–40 ms</td><td>The CPU production default. Best CPU NER spaCy ships.</td></tr>
+    <tr><td><code>en_core_web_trf</code></td><td>~440 MB</td><td>~92%</td><td>~50–200 ms CPU, ~10–20 ms GPU</td><td>When you have GPU and need top accuracy</td></tr>
+  </tbody>
+</table>
+
+<p>Numbers above are typical published benchmarks on standard hardware (modern x86 server CPU, single thread). Real numbers depend on text characteristics, hardware, batching, and what other pipeline components are enabled. Verify before trusting.</p>
+
+<h3>Memory and concurrency</h3>
+
+<p>spaCy's model objects are not safe to share across threads in a way that bypasses the GIL. The practical pattern is multiprocess workers: each worker loads its own copy of the model into RAM. For <code>en_core_web_lg</code> at ~600 MB per worker, an 8-worker deployment uses ~4.8 GB of RAM just for models. At higher concurrency this becomes the dominant cost.</p>
+
+<h3>Strengths</h3>
+
+<ul>
+  <li>Mature, well-documented, large community, active commercial backing.</li>
+  <li>Easy to fine-tune on your own labelled data (the docs walk you through it).</li>
+  <li>Pluggable architecture — you can swap the NER component for a transformer pipeline or your own custom component without rewriting the rest.</li>
+  <li>Good baseline accuracy without fine-tuning for common Western entity types.</li>
+  <li>Excellent tokenizer that handles edge cases (URLs, emails inside text, contractions) reliably.</li>
+</ul>
+
+<h3>Weaknesses</h3>
+
+<ul>
+  <li>Python-only inference. Latency floor is what Python can do.</li>
+  <li>Each worker loads a full model copy — RAM-expensive at concurrency.</li>
+  <li>The CPU NER tagger's accuracy plateaued years ago; transformer variants get more accuracy but cost much more CPU.</li>
+  <li>Cold start is real — loading <code>en_core_web_lg</code> takes 3–8 seconds. Readiness probes must wait for it.</li>
+</ul>
+
+<h2>Presidio</h2>
+
+<h3>What it is</h3>
+
+<p><a href="https://github.com/microsoft/presidio">Microsoft Presidio</a> is an open-source PII detection and anonymization framework, first released in 2019 and actively maintained since. It is not a model — it is a framework that orchestrates detection across multiple kinds of recognizers and provides a clean API for anonymization.</p>
+
+<h3>Architecture</h3>
+
+<p>Two services that can run together or separately:</p>
+
+<ul>
+  <li><strong>Presidio Analyzer</strong> — finds PII spans in text. Composed of:
+    <ul>
+      <li>A <em>recognizer registry</em> with built-in pattern-based recognizers (regex + checksum, e.g. Luhn for credit cards).</li>
+      <li>An <em>NLP engine</em> that does named-entity recognition for free-text entities (PERSON, LOCATION, ORGANIZATION, DATE_TIME). Default backend is spaCy; can be swapped for Stanza, transformers, or a custom backend.</li>
+      <li>A <em>context-aware enhancer</em> that boosts or reduces detection confidence based on surrounding words (e.g. &ldquo;DOB:&rdquo; near a date increases its confidence as a date-of-birth).</li>
+      <li>The full pipeline runs all relevant recognizers and merges/dedupes overlapping spans.</li>
+    </ul>
+  </li>
+  <li><strong>Presidio Anonymizer</strong> — given analyzer results + original text, applies an anonymization operator (replace, redact, mask, hash, encrypt) to each span. Pluggable per entity type.</li>
+</ul>
+
+<h3>Built-in recognizers (selected)</h3>
+
+<table>
+  <thead><tr><th>Category</th><th>Entity types Presidio ships with</th></tr></thead>
+  <tbody>
+    <tr><td>Pattern-based (regex + validation)</td><td><code>PHONE_NUMBER</code>, <code>EMAIL_ADDRESS</code>, <code>CREDIT_CARD</code> (Luhn), <code>IBAN_CODE</code>, <code>IP_ADDRESS</code>, <code>URL</code>, <code>CRYPTO</code>, <code>DATE_TIME</code></td></tr>
+    <tr><td>NER-based (via NLP engine)</td><td><code>PERSON</code>, <code>LOCATION</code>, <code>ORGANIZATION</code>, <code>NRP</code> (nationality / religious / political group)</td></tr>
+    <tr><td>US-specific</td><td><code>US_SSN</code>, <code>US_PASSPORT</code>, <code>US_DRIVER_LICENSE</code>, <code>US_BANK_NUMBER</code>, <code>US_ITIN</code></td></tr>
+    <tr><td>International</td><td><code>UK_NHS</code>, <code>UK_NINO</code>, <code>AU_TFN</code>, <code>AU_ACN</code>, <code>AU_ABN</code>, <code>AU_MEDICARE</code>, <code>SG_NRIC_FIN</code>, <code>ES_NIF</code>, <code>IT_*</code> (several), <code>PL_PESEL</code>, <code>IN_PAN</code>, <code>IN_AADHAAR</code></td></tr>
+    <tr><td>Medical / professional</td><td><code>MEDICAL_LICENSE</code></td></tr>
+  </tbody>
+</table>
+
+<p>You can disable recognizers per request (allow-list), pass deny-list contexts, add custom regex recognizers, or register your own recognizer class with arbitrary detection logic. The ad-hoc-recognizer story is good.</p>
+
+<h3>What's the Presidio overhead, really?</h3>
+
+<p>When you call <code>analyzer.analyze(text)</code>, Presidio:</p>
+
+<ol>
+  <li>Runs the NLP engine on the text once (spaCy NER + tokenization). This is where most of the time goes — see the spaCy section above.</li>
+  <li>Runs each pattern-based recognizer's regexes against the text. Regex compilation is cached; matching is fast (sub-ms total even with all built-ins enabled).</li>
+  <li>Runs validation (e.g. Luhn for credit cards) on regex hits.</li>
+  <li>Runs the context enhancer, which looks at tokens within a window of each span.</li>
+  <li>Merges overlapping spans and applies confidence thresholds.</li>
+</ol>
+
+<p>For a 500-token input, Presidio's own dispatch + regex + context layers add roughly 3–5 ms on top of the NLP engine cost. That's the &ldquo;Presidio tax&rdquo; — the price of the framework, separate from the model. It's not zero, but it's not the dominant cost.</p>
+
+<h3>What Microsoft maintains</h3>
+
+<p>Worth being precise here, because it factors into the &ldquo;I like the Microsoft commitment&rdquo; reasoning. Microsoft's Presidio team maintains:</p>
+
+<ul>
+  <li>The recognizer framework and registry.</li>
+  <li>All the pattern-based and US/international recognizers above.</li>
+  <li>The context-aware enhancer logic.</li>
+  <li>The anonymizer with its operator set.</li>
+  <li>Adapters to swap the underlying NLP engine.</li>
+  <li>Documentation, examples, container images, CI.</li>
+</ul>
+
+<p>Microsoft <em>does not</em> maintain:</p>
+
+<ul>
+  <li>spaCy itself (Explosion AI does).</li>
+  <li>The NER model weights you actually use (also Explosion AI, or HuggingFace if you swap to transformers).</li>
+  <li>The transformer backbone if you swap to a transformers-based NLP engine.</li>
+</ul>
+
+<p>If you go Rust + ONNX, you lose the recognizer framework (which you'd reimplement — a real cost, see below) but you don't lose access to any model. The same spaCy or HuggingFace models can be exported to ONNX and run from Rust.</p>
+
+<h3>What reimplementing the Presidio framework actually involves</h3>
+
+<p>If you keep the same entity coverage Presidio gives out of the box, you'd write:</p>
+
+<ul>
+  <li>~25–30 pattern recognizers, each one a regex and a validation function. Most are 10–30 lines. A competent engineer can do them in ~2–3 days, plus a few days of test coverage.</li>
+  <li>A context-aware enhancer. The Presidio implementation is a few hundred lines; reimplementing the same logic in Rust is straightforward but tedious.</li>
+  <li>A merge/dedupe layer for overlapping spans.</li>
+  <li>An anonymizer with at least the &ldquo;replace with token&rdquo; operator (the only one this service needs).</li>
+</ul>
+
+<p>Realistic budget: 1–2 weeks for the framework, plus the corpus and effort to validate that you match Presidio's recall on a test set. Not exotic; not free.</p>
+
+<h2>ONNX and ONNX Runtime</h2>
+
+<h3>What ONNX is</h3>
+
+<p>ONNX (Open Neural Network Exchange) is a model-format specification — a way to represent a neural network's computation graph and weights in a portable file. Originally launched by Facebook and Microsoft in 2017, now governed by the Linux Foundation. Most ML frameworks (PyTorch, TensorFlow, scikit-learn, JAX) can export to ONNX.</p>
+
+<h3>What ONNX Runtime is</h3>
+
+<p><a href="https://onnxruntime.ai">ONNX Runtime</a> is Microsoft-led, open-source inference engine that loads an ONNX model and runs it efficiently across hardware backends. Key properties:</p>
+
+<ul>
+  <li><strong>Graph optimization.</strong> On load, the runtime fuses operators, eliminates redundant nodes, and rewrites subgraphs to use optimized kernels. The optimized graph is what you actually execute.</li>
+  <li><strong>Quantization.</strong> int8 quantization of weights and activations typically cuts inference latency 2–4× and model size 4× with a small accuracy hit (often <1% F1 on NER tasks).</li>
+  <li><strong>Cross-language bindings.</strong> Official bindings for C++, Python, C#, Java, JavaScript, Objective-C. Community bindings for Rust (<code>ort</code>) are mature and widely used.</li>
+  <li><strong>Hardware backends.</strong> CPU (with AVX/AVX-512), CUDA, TensorRT, DirectML, CoreML, ROCm, OpenVINO. Pick at deploy time.</li>
+</ul>
+
+<h3>Getting a NER model into ONNX</h3>
+
+<p>For HuggingFace transformer-based NER models (e.g. <code>dslim/bert-base-NER</code>, <code>Davlan/distilbert-base-multilingual-cased-ner-hrl</code>), the export path is:</p>
+
+<pre>
+optimum-cli export onnx --model dslim/bert-base-NER --task token-classification ./onnx-out
+optimum-cli onnxruntime quantize --onnx_model ./onnx-out -o ./onnx-quantized --avx2
+</pre>
+
+<p>For spaCy models specifically, the export story is rougher — spaCy's CPU tagger is not a transformer and doesn't ONNX-export cleanly. The transformer-based spaCy models (<code>*_trf</code>) export the underlying HuggingFace transformer, but you lose spaCy's beam search and have to reimplement decoding. The honest path for Rust + ONNX is <em>not</em> &ldquo;export the spaCy model&rdquo; — it's &ldquo;pick a HuggingFace NER model that exports cleanly.&rdquo;</p>
+
+<h3>What this means for the comparison</h3>
+
+<p>The earlier comparison table implicitly compared <em>different models</em>, not just different runtimes:</p>
+
+<ul>
+  <li>Python + Presidio path uses <code>en_core_web_lg</code> — spaCy's beam-search tagger.</li>
+  <li>Rust + ONNX path uses something like quantized DistilBERT-NER.</li>
+</ul>
+
+<p>These models have different accuracy and different latency profiles. The fair comparisons are:</p>
+
+<ul>
+  <li><strong>Python+spaCy lg</strong> vs <strong>Python+ONNX quantized DistilBERT-NER</strong> — isolates the engine swap. Most of the inference speedup is here.</li>
+  <li><strong>Python+ONNX</strong> vs <strong>Rust+ONNX</strong> — isolates the runtime/shell. Rust wins on shell latency, no GIL, RAM efficiency. Inference cost is identical.</li>
+</ul>
+
+<h2>Alternative engines worth knowing</h2>
+
+<h3>Stanza (Stanford NLP Group)</h3>
+<p>Python NLP toolkit similar in scope to spaCy, with strong multilingual support. NER accuracy is competitive with spaCy lg on English (~89–91% F1). Latency on CPU is generally 1.5–3× slower than spaCy lg. Useful primarily if Stanza's multilingual NER is materially better on a target language than spaCy's.</p>
+
+<h3>Flair (Zalando Research)</h3>
+<p>Python framework with character-level contextual embeddings. State-of-the-art NER F1 on several benchmarks (~93–94%) but CPU latency is high (~100–500 ms per document). Tends to win accuracy benchmarks; loses production deployments to faster options. Worth knowing about; rarely the production answer.</p>
+
+<h3>HuggingFace transformers (direct)</h3>
+<p>Use a fine-tuned NER model directly via the <code>transformers</code> library. Higher accuracy than spaCy CPU models (any well-fine-tuned BERT-base scores ~92–93% F1) but CPU latency is the same order as spaCy <code>*_trf</code>. The natural path here is to <em>export to ONNX</em> for production, not run via PyTorch directly.</p>
+
+<h3>GLiNER (2024)</h3>
+<p>Recent (2024) generalist NER model that achieves near-LLM-level accuracy with a relatively small encoder. Notable because it can do zero-shot entity recognition — give it an entity type as a string, get back spans, no fine-tuning. CPU latency competitive with DistilBERT-NER. <a href="https://github.com/urchade/GLiNER">Repo</a>. Worth tracking; possibly the future of off-the-shelf NER.</p>
+
+<h3>rust-bert</h3>
+<p>Pure-Rust port of HuggingFace transformers with built-in pipelines for NER, classification, summarization. Uses tch-rs (libtorch bindings) under the hood, so &ldquo;pure Rust&rdquo; is slightly misleading — you still have a libtorch dependency. CPU NER latency ~30–80 ms per call. Decent fallback if ONNX Runtime is unavailable.</p>
+
+<h3>Custom rule-based (regex + dictionaries)</h3>
+<p>For the structured entities (SSN, phone, credit card, MRN patterns), pure regex is sub-millisecond and high-recall. For names, locations, and free-text entities, regex alone has terrible recall (a name is just any capitalized word — false-positive nightmare). Custom rules are a great <em>fast path</em> in front of NER, not a replacement.</p>
+
+<h2>Speed in context: is 25–50 ms vs 5–15 ms actually meaningful?</h2>
+
+<p>The honest answer depends on the call pattern. The same numeric gap is either &ldquo;completely imperceptible&rdquo; or &ldquo;disqualifying&rdquo; depending on context.</p>
+
+<h3>Human perception thresholds (worth grounding against)</h3>
+
+<table>
+  <thead><tr><th>Latency</th><th>How it feels to a user</th></tr></thead>
+  <tbody>
+    <tr><td>&lt; 100 ms</td><td>Instantaneous. User cannot distinguish 10 ms from 50 ms.</td></tr>
+    <tr><td>100–300 ms</td><td>Noticeable but feels responsive. UI animations and skeleton states cover it.</td></tr>
+    <tr><td>300 ms – 1 s</td><td>Sluggish. User starts to question whether anything is happening.</td></tr>
+    <tr><td>&gt; 1 s</td><td>Broken-feeling. User context-switches to other tabs.</td></tr>
+  </tbody>
+</table>
+
+<h3>The same numbers, in different call patterns</h3>
+
+<h4>Single call per chat submission (the default chat-app pattern)</h4>
+<p>User hits send → app calls <code>/redact</code> → app calls LLM → app shows response. Redaction is one cost in a chain where the LLM call dominates (hundreds of ms to seconds). <strong>30 ms vs 10 ms is imperceptible in this pattern.</strong> The LLM call swamps both.</p>
+
+<h4>Debounced per-keystroke (live UI feedback)</h4>
+<p>User types in an input box; app debounces at 100–200 ms and calls <code>/redact</code> to show what would be sent. The debounce window must accommodate the redaction round-trip. <strong>Both 30 ms and 10 ms fit comfortably in a 150 ms debounce; the gap is invisible.</strong> Where it'd matter: if you wanted to shrink the debounce window to make the feedback feel snappier (e.g. 50 ms), the 10 ms option keeps you in budget; the 30 ms option doesn't.</p>
+
+<h4>Un-debounced per-keystroke</h4>
+<p>Bad UX pattern (over-calls the service) but worth naming. At a typing speed of ~5 keystrokes/sec, 10 ms keeps you well under the 100 ms perception threshold per keystroke. 30 ms is still under it but uses 30% of the budget. <strong>10 ms wins meaningfully here; 30 ms is borderline.</strong></p>
+
+<h4>Batch redaction (audit logs, retrieval indexing, eval corpus prep)</h4>
+<p>Run <code>/redact</code> across thousands or millions of documents. Per-call latency multiplies directly. <strong>30 ms × 1M docs = 8.3 hours; 10 ms × 1M docs = 2.8 hours.</strong> Concrete operational difference.</p>
+
+<h4>High concurrency per pod (chat at scale)</h4>
+<p>Latency per call doesn't change much; what changes is RAM and tail latency:</p>
+<ul>
+  <li>Python: each worker holds ~600 MB of model. 16 workers = 9.6 GB. Tail latency at p99 can balloon to 200–500 ms under GC pressure and GIL contention.</li>
+  <li>Rust+ONNX: one model copy serves all concurrent requests. ~150–300 MB total for a quantized DistilBERT-NER. Tail latency at p99 stays close to median because there's no GC and no GIL.</li>
+</ul>
+<p><strong>At 100+ req/s per pod, Rust wins on a different axis than median latency.</strong> Median goes from 30 ms to 10 ms (3× better), but p99 goes from 300 ms to 30 ms (10× better) and RAM goes from 10 GB to 300 MB (30× better). The tail is the real story.</p>
+
+<h3>Where this leaves the choice</h3>
+
+<p>If the service is invoked on a chat hot path with LLM calls downstream, the latency difference is invisible to users. If it's invoked at high concurrency or in batch, the difference is real and operational.</p>
+
+<p>The right question is not &ldquo;is 25 ms enough better than 50 ms,&rdquo; it's &ldquo;what call pattern will dominate, and does the tail matter more than the median?&rdquo;</p>
+
+<h2>What &ldquo;offering both solutions&rdquo; actually means</h2>
+
+<p>There are four real interpretations of &ldquo;both,&rdquo; with quite different trade-offs.</p>
+
+<h3>Variant A — Two separate services, same API</h3>
+
+<p>Deploy two independent services that both implement <code>/redact</code> and <code>/unredact</code>: one in Python+Presidio, one in Rust+ONNX. Caller picks per route, per environment, or per A/B split.</p>
+
+<ul>
+  <li><strong>Pros:</strong> Maximum isolation. Different teams can own each. Easy to A/B test in production.</li>
+  <li><strong>Cons:</strong> Two codebases forever. Two CI pipelines. Two threat models. Two security audits. Two on-call playbooks. Token format and behavior must be kept identical via cross-service tests, or callers can't switch.</li>
+  <li><strong>Honest cost:</strong> ~1.7× the maintenance of one service, not 2× — there's shared docs and shared contract — but the duplication is real and permanent.</li>
+</ul>
+
+<h3>Variant B — One service, plugin-selectable engine</h3>
+
+<p>Build one service (in one language) with a clean engine interface; ship two engine implementations behind it. Selection via env var or config.</p>
+
+<ul>
+  <li><strong>Pros:</strong> Single CI, single deploy artifact, single threat model. Engine swap is a config change, not a re-architecture.</li>
+  <li><strong>Cons:</strong> The plugin abstraction is itself code (and a source of bugs). The two engines can't both be written natively — you'd either run Python with both Presidio-in-process and ONNX-in-process (no Rust speedup), or run Rust with both ONNX-in-process and Presidio-as-sidecar (the Python part is still slow). You're choosing one shell language.</li>
+  <li><strong>Honest cost:</strong> Less duplication than Variant A. But you don't actually get &ldquo;both&rdquo; languages — you get one language with engine choice.</li>
+</ul>
+
+<h3>Variant C — Layered hybrid: regex fast path + NER slow path</h3>
+
+<p>This is what the existing ARCHITECTURE.html &ldquo;Performance approach&rdquo; section already proposes. The fast layer catches structured entities (SSN, phone, email, PAN, MRN) — handles maybe 60–80% of real-world redactions in microseconds. The slow layer runs NER only on inputs that the fast layer didn't fully cover.</p>
+
+<ul>
+  <li><strong>Pros:</strong> Most inputs never hit NER, so &ldquo;average&rdquo; latency drops dramatically. Compatible with either Presidio or ONNX (the fast layer is a few hundred lines of regex regardless).</li>
+  <li><strong>Cons:</strong> Doesn't help inputs that <em>do</em> contain free-text entities — those still pay the full NER cost. The headline p95 number is essentially unchanged; what changes is the median and the load on the NER engine.</li>
+  <li><strong>Honest cost:</strong> One-time engineering investment in the fast path. Worth doing regardless of which engine the slow path uses.</li>
+</ul>
+
+<h3>Variant D — Tiered offering: &ldquo;fast&rdquo; tier vs &ldquo;featureful&rdquo; tier</h3>
+
+<p>Productize the choice. The &ldquo;fast&rdquo; tier (Rust + ONNX, small entity set, single English model) is for high-throughput / interactive cases. The &ldquo;featureful&rdquo; tier (Python + Presidio, full recognizer catalog, multilingual, custom recognizers) is for batch / compliance / multi-jurisdiction cases. Same API, deployed separately, callers pick the URL.</p>
+
+<ul>
+  <li><strong>Pros:</strong> Honest about the trade-off. Different deployment topologies for different use cases without pretending one solution fits both.</li>
+  <li><strong>Cons:</strong> Same maintenance cost as Variant A. Marketing/positioning overhead — callers have to understand which tier to pick.</li>
+  <li><strong>When it makes sense:</strong> Multiple distinct caller types with genuinely different requirements (e.g. interactive chat <em>and</em> a batch indexer <em>and</em> a multilingual compliance tool).</li>
+</ul>
+
+<h3>The honest read on &ldquo;offer both&rdquo;</h3>
+
+<p>Maintaining two production-grade implementations of the same service is expensive forever. Most teams that go this route end up letting one rot. The cases where &ldquo;both&rdquo; pays off:</p>
+
+<ul>
+  <li>You have two genuinely different caller types with different SLAs (Variant D).</li>
+  <li>You want a migration path from one to the other (Variant A or B, with a clear retirement date for the loser).</li>
+  <li>The fast/slow split is layered within one engine, not two parallel engines (Variant C).</li>
+</ul>
+
+<p>Variant C is the cheapest &ldquo;both&rdquo; and it's already in the design. The interesting new question is whether Variants A or D are warranted by an actual second caller type — which depends on M0 inputs we don't yet have (deployment topology, caller mix).</p>
+
+<h2>Putting it together</h2>
+
+<p>The crisp version of what the deep-dive surfaces:</p>
+
+<ol>
+  <li>spaCy is mature and fast-enough for CPU NER, with predictable accuracy and a real RAM cost at concurrency.</li>
+  <li>Presidio is a thin-ish framework on top of spaCy; the Microsoft commitment is to the framework, not to the model.</li>
+  <li>ONNX is the portable inference path. Most of the &ldquo;Rust speedup&rdquo; really comes from the model swap (transformer NER → quantized small NER), not from Rust itself. Python + ONNX captures most of the inference speedup; Rust + ONNX adds shell latency and concurrency wins on top.</li>
+  <li>The 25–50 ms vs 5–15 ms gap is invisible to a single chat-app caller. It becomes meaningful at concurrency, in batch, or when measured at p99 instead of p50.</li>
+  <li>&ldquo;Offering both&rdquo; in the strong sense (two parallel implementations) is expensive forever. The cheap version (regex fast path + NER slow path) is already in the design and worth doing.</li>
+</ol>
+
+<p>The decision this informs lives in <a href="../decisions/0001-language-and-topology.html">ADR 0001</a>. The honest next step is a one-day perf spike on the actual input distribution before locking it.</p>
+
+<h2>Caveats on the numbers cited above</h2>
+
+<ul>
+  <li>All latency figures come from published benchmarks and prior knowledge, not from running on this project's hardware or input distribution. They are good enough to decide whether to invest in a spike; they are not good enough to lock the decision.</li>
+  <li>spaCy NER F1 figures are on OntoNotes 5, an English news/web-text benchmark. PII recall on clinical, financial, or legal text can be materially different — usually worse on specialized vocabulary.</li>
+  <li>ONNX quantization accuracy loss is &ldquo;typically &lt; 1%&rdquo; on standard NER benchmarks. On a fine-tuned domain-specific model, it can be more — verify per model.</li>
+  <li>Concurrency numbers assume a single-pod baseline. Real Kubernetes deployments with HPA and resource limits behave differently.</li>
+  <li>Model F1 is not the same as PII leakage rate. A 91% F1 model can still miss the wrong things — what matters is per-entity-type recall on the entities you care about. See <a href="../ARCHITECTURE.html#redaction-quality-targets">ARCHITECTURE — Redaction quality targets</a>.</li>
+</ul>
+
+<h2>Further reading</h2>
+
+<ul>
+  <li>spaCy NER details: <a href="https://spacy.io/usage/linguistic-features#named-entities">https://spacy.io/usage/linguistic-features#named-entities</a></li>
+  <li>Presidio architecture: <a href="https://microsoft.github.io/presidio/">https://microsoft.github.io/presidio/</a></li>
+  <li>ONNX Runtime performance tuning: <a href="https://onnxruntime.ai/docs/performance/">https://onnxruntime.ai/docs/performance/</a></li>
+  <li>Optimum (HuggingFace → ONNX exporter): <a href="https://huggingface.co/docs/optimum">https://huggingface.co/docs/optimum</a></li>
+  <li>HIPAA Safe Harbor identifier list: <a href="https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/index.html">HHS de-identification guidance</a></li>
+</ul>
+
+</body>
+</html>

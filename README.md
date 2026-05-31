@@ -63,6 +63,7 @@ Project documentation under `docs/` is authored in HTML, not markdown (see [`CLA
 - [`docs/PLAN.html`](docs/PLAN.html) — milestones from M0 (design freeze) through MVP and beyond
 - [`docs/decisions/0001-language-and-topology.html`](docs/decisions/0001-language-and-topology.html) — ADR (status: Proposed) for the language and process-topology decision
 - [`docs/decisions/0002-service-shape.html`](docs/decisions/0002-service-shape.html) — ADR (status: Accepted) for the pivot from transparent LLM proxy to redaction microservice
+- [`docs/research/ner-engines-deep-dive.html`](docs/research/ner-engines-deep-dive.html) — research note on spaCy, Presidio, ONNX, and alternative engines; informs ADR 0001
 - [`CLAUDE.md`](CLAUDE.md) — instructions for Claude Code when working in this repo
 - [`skills/karpathy-guidelines/SKILL.md`](skills/karpathy-guidelines/SKILL.md) — vendored coding guidelines
 
