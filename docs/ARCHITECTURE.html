@@ -8,45 +8,51 @@
 
 <h1>Architecture</h1>
 
+<p><em>Note: the service shape changed on 2026-05-30 from a transparent OpenAI-compatible proxy to a standalone redaction microservice. See <a href="decisions/0002-service-shape.html">ADR 0002</a> for the rationale.</em></p>
+
 <h2>Problem</h2>
 
-<p>Healthcare-adjacent chat surfaces receive prompts that contain PHI (patient names, DOBs, MRNs, phone numbers, addresses). Forwarding those prompts directly to an LLM — even a self-hosted one — creates auditability and disclosure risk. We want a single chokepoint that strips identifiers before the model sees them and restores them in the response shown to the user.</p>
+<p>Applications in regulated industries — healthcare chat, financial assistants, legal copilots, pharma research tools, GDPR-scoped products — routinely handle text that contains identifiers which must not leak to a third-party LLM. The same applications also need to log, index, archive, and evaluate that text without accumulating identifiers in those downstream systems. We need a single place to do the redaction step, callable on its own, fast enough that the calling app can invoke it on the hot path of a user interaction.</p>
 
 <h2>Goals</h2>
 
 <ul>
-  <li><strong>Block raw PHI from reaching the model.</strong> The LLM should see anonymized tokens, never original identifiers.</li>
-  <li><strong>Preserve a useful UX.</strong> The user-visible response should still reference real names/dates where appropriate — redaction must be reversible for the client.</li>
-  <li><strong>Drop into existing stacks.</strong> Clients should be able to point at us by changing only a base URL (OpenAI-compatible API).</li>
-  <li><strong>Run entirely on-prem.</strong> No third-party API calls in the redaction path. Suitable for HIPAA-covered environments.</li>
-  <li><strong>Be fast enough for interactive chat.</strong> Added latency should be a small fraction of the LLM call itself.</li>
+  <li><strong>Block raw identifiers from any downstream system the caller chooses.</strong> The service's only job is to redact text deterministically and return it.</li>
+  <li><strong>Be reversible.</strong> Return a token map so the caller can rehydrate the original values where appropriate. Expose a matching <code>/unredact</code> endpoint so substitution rules live in one place.</li>
+  <li><strong>Be composable.</strong> A chat app, a batch job, a retrieval pipeline, and an eval harness should all be able to call it for their own reasons without pretending to be an LLM caller.</li>
+  <li><strong>Run entirely on-prem.</strong> No third-party API calls in the redaction path. Required for HIPAA, PCI-DSS, GDPR-strict, and similar regimes.</li>
+  <li><strong>Be fast enough for interactive use.</strong> When called from a chat input on submit (or debounced typing), the redaction round-trip is the user-perceived latency. Target a small fraction of a second.</li>
 </ul>
 
 <h2>Non-goals (v1)</h2>
 
 <ul>
-  <li>Multi-tenant auth, rate limiting, audit logging. Provided by the surrounding infra.</li>
+  <li>Proxying LLM calls. The service does not know about LLM backends, OpenAI's schema, auth headers, or streaming responses. See <a href="decisions/0002-service-shape.html">ADR 0002</a>.</li>
+  <li>Server-side session state. Token maps are caller-owned and round-tripped on each call.</li>
+  <li>Multi-tenant auth, rate limiting, audit logging — handled by surrounding infra.</li>
   <li>Training a custom PII model. We use Presidio's out-of-the-box recognizers plus regex add-ons.</li>
   <li>Detecting PHI in <em>images, audio, or attached files</em>. Text only.</li>
-  <li>Detecting model-emitted hallucinated identifiers (model invents a name not in the input). Tracked as an open question.</li>
 </ul>
 
 <h2>High-level design</h2>
 
 <pre>
-┌────────┐   POST /v1/chat/completions   ┌────────────────────────────┐
-│ Client │ ────────────────────────────▶ │ prompt-redact proxy        │
-│        │                                │                            │
-│        │ ◀──────────────────────────── │  1. redact request messages│
-└────────┘   200 chat.completion          │  2. forward to upstream    │
-                                          │  3. rehydrate response     │
-                                          └────────────┬───────────────┘
-                                                       │
-                                                       ▼
-                                          ┌────────────────────────────┐
-                                          │ Upstream LLM               │
-                                          │ (self-hosted, OpenAI-compat)│
-                                          └────────────────────────────┘
+                          ┌──────────────────────────┐
+   raw text + map  ─────▶ │  POST /redact            │ ─────▶ redacted text + map
+                          ├──────────────────────────┤
+   text + map      ─────▶ │  POST /unredact          │ ─────▶ rehydrated text
+                          ├──────────────────────────┤
+                          │  GET  /healthz           │
+                          └────────────┬─────────────┘
+                                       │
+                                       ▼
+                          ┌──────────────────────────┐
+                          │  Presidio analyzer       │
+                          │  (spaCy + recognizers)   │
+                          └──────────────────────────┘
+
+   Caller (chat app, batch job, indexer, eval harness, ...) owns the token map
+   and decides what to do with redacted text. The service is stateless.
 </pre>
 
 <h2>Implementation stack — <strong>TBD</strong></h2>
@@ -56,72 +62,73 @@
     <tr><th>Decision</th><th>Status</th></tr>
   </thead>
   <tbody>
-    <tr><td>Implementation language</td><td><strong>TBD</strong> — see open question #0</td></tr>
+    <tr><td>Implementation language</td><td><strong>TBD</strong> — see <a href="decisions/0001-language-and-topology.html">ADR 0001</a></td></tr>
     <tr><td>HTTP framework</td><td>TBD (follows from language)</td></tr>
-    <tr><td>Redaction engine</td><td>Presidio <em>(locked)</em> — note: Python-only library, so language choice is constrained to Python or a &ldquo;Presidio sidecar + proxy in language X&rdquo; split</td></tr>
+    <tr><td>Redaction engine</td><td>Presidio <em>(locked)</em> — Python-only; constrains language choice to Python or a sidecar split</td></tr>
     <tr><td>Test framework</td><td>TBD (follows from language)</td></tr>
-    <tr><td>HTTP client (for upstream)</td><td>TBD (follows from language)</td></tr>
   </tbody>
 </table>
 
-<p>Until the language is picked, treat the component descriptions below as language-agnostic shapes, not file/module layouts.</p>
-
 <h2>Components</h2>
 
-<h3>1. HTTP proxy</h3>
-<p>A small async HTTP server that exposes an OpenAI-compatible surface. Initial endpoints:</p>
-<ul>
-  <li><code>POST /v1/chat/completions</code> — the main path. Non-streaming for v1; streaming deferred (see open questions).</li>
-  <li><code>GET /healthz</code> — liveness.</li>
-</ul>
-<p>The proxy is a thin shell: parse request → call redactor → forward to upstream → call rehydrator → return.</p>
+<h3>1. HTTP service</h3>
+<p>Async HTTP server exposing three endpoints (specified under &ldquo;API surface&rdquo; below): <code>POST /redact</code>, <code>POST /unredact</code>, <code>GET /healthz</code>. The service is stateless — no sessions, no caches, no per-caller state. Horizontal scaling is by adding replicas.</p>
 
 <h3>2. Redactor</h3>
-<p>Wraps Presidio's <code>AnalyzerEngine</code> and <code>AnonymizerEngine</code>. Responsibilities:</p>
+<p>Wraps Presidio's <code>AnalyzerEngine</code>. Responsibilities:</p>
 <ul>
-  <li>Run analysis on each message's text content.</li>
-  <li>Assign a stable token per unique original value within a request (e.g. <code>"John Doe"</code> always becomes <code>[PERSON_1]</code> in this request, even if it appears in turns 1 and 3).</li>
-  <li>Emit the redacted text + a token → original mapping.</li>
+  <li>Run analysis on the input text.</li>
+  <li>Merge the caller-supplied token map (if any) with new findings, assigning new tokens only for originals not already in the map. This is how cross-call consistency works: the caller passes their accumulated map back in.</li>
+  <li>Apply replacements right-to-left and emit the redacted text + the updated map.</li>
 </ul>
 
-<h3>3. Token map (per-request, in-process)</h3>
-<p>A plain map scoped to a single chat completion request. No Redis, no cross-request persistence in v1.</p>
-<p><strong>Rationale:</strong> OpenAI chat completions are stateless — clients re-send the full message history each turn — so a per-request map is sufficient for both within-call and across-turn consistency. Adding a session store before we need it would be speculative complexity.</p>
+<h3>3. Unredactor</h3>
+<p>Given text and a token map, substitutes tokens back to their originals. Same substitution rules as the redactor uses internally, centralized so callers don't reimplement edge cases (token collision, partial matches).</p>
 
-<h3>4. Upstream client</h3>
-<p>Forwards the redacted request to a configured upstream URL. Passes through <code>Authorization</code> and other relevant headers verbatim.</p>
-
-<h3>5. Rehydrator</h3>
-<p>Reverse-substitutes tokens in the upstream response's <code>choices[*].message.content</code> using the request's token map.</p>
+<h3>(Removed) Upstream client</h3>
+<p>The transparent-proxy design had an &ldquo;Upstream client&rdquo; component that forwarded redacted requests to an LLM. <a href="decisions/0002-service-shape.html">ADR 0002</a> removed it. The service no longer touches LLM backends.</p>
 
 <h2>Data flow</h2>
 
+<h3>Redact</h3>
 <pre>
-request.messages
-   │
-   ▼  for each message
-┌────────────────────────────────────────┐
-│ redactor.analyze(text)                 │
-│   → [RecognizerResult{start,end,type}] │
-└────────────────────────────────────────┘
-   │
-   ▼  assign tokens (stable within request)
-┌────────────────────────────────────────┐
-│ apply replacements right-to-left       │
-│ update reverse_map[token] = original   │
-└────────────────────────────────────────┘
-   │
-   ▼
-forward to upstream
-   │
-   ▼
-response.choices[*].message.content
-   │
-   ▼  for each token in reverse_map
-text.replace(token, original)
-   │
-   ▼
-return to client
+caller has:
+  - text          (e.g. "Update patient John Doe, MRN 12345.")
+  - token_map     (e.g. {"[PERSON_1]": "Jane Roe"}  from earlier turns;
+                   may be empty on first call)
+
+POST /redact { text, token_map } ──▶
+                                          ┌─────────────────────────────┐
+                                          │ analyzer.analyze(text)      │
+                                          │   → spans                   │
+                                          └────────────┬────────────────┘
+                                                       │
+                                                       ▼
+                                          ┌─────────────────────────────┐
+                                          │ for each span:              │
+                                          │   if original in token_map  │
+                                          │     reuse existing token    │
+                                          │   else                      │
+                                          │     mint new token          │
+                                          │     add to map              │
+                                          │ apply replacements R→L      │
+                                          └────────────┬────────────────┘
+                                                       │
+                                                       ▼
+                              ◀── 200 { redacted_text, token_map }
+
+caller stores updated token_map for the next turn.
+</pre>
+
+<h3>Unredact</h3>
+<pre>
+caller has:
+  - text          (e.g. the assistant reply from an LLM, with tokens in it)
+  - token_map     (the one accumulated across the conversation)
+
+POST /unredact { text, token_map } ──▶  for each (token, original) in map:
+                                            text = substitute(text, token, original)
+                              ◀── 200 { text }
 </pre>
 
 <h2>Token format</h2>
@@ -130,69 +137,109 @@ return to client
 
 <p>Chosen so the model:</p>
 <ul>
-  <li>Sees a clear placeholder it can reason about ("the patient is [PERSON_1]").</li>
+  <li>Sees a clear placeholder it can reason about (&ldquo;the patient is [PERSON_1]&rdquo;).</li>
   <li>Can refer back to the same entity consistently.</li>
   <li>Won't be tempted to invent a value (it sees a non-natural string).</li>
 </ul>
+
+<p><em>N</em> is allocated against the caller-supplied map, not a per-process counter. If the caller's map already has <code>[PERSON_1]</code> and <code>[PERSON_2]</code>, a new person becomes <code>[PERSON_3]</code>. This keeps numbering stable across turns within a conversation and across replicas (the service has no shared state).</p>
 
 <h2>Performance approach</h2>
 
 <p>Per the v0 notes, we want a hybrid path:</p>
 <ol>
-  <li><strong>Regex fast path</strong> for structured identifiers (SSN, phone, email, MRN patterns).</li>
+  <li><strong>Regex fast path</strong> for structured identifiers (SSN, PAN, phone, email, MRN patterns).</li>
   <li><strong>NLP slow path</strong> (spaCy via Presidio) only for free-text spans that didn't fully match regex.</li>
 </ol>
 <p>For v1 we ship with Presidio's default pipeline (which already runs regex recognizers before NER) and measure. The hybrid split becomes a real optimization only if profiling shows the NLP pass dominating.</p>
 
+<p>Because the service is on a caller's hot path, the latency budget is <em>not</em> &ldquo;added cost on top of an LLM call&rdquo; (as it would have been in the old proxy design) — it's the whole user-perceived round-trip. See <a href="#redaction-quality-targets">Redaction quality targets</a>.</p>
+
 <h2>API surface</h2>
 
-<h3><code>POST /v1/chat/completions</code></h3>
-<p>Request body matches OpenAI's schema. v1 supports:</p>
-<ul>
-  <li><code>model</code> (passed through)</li>
-  <li><code>messages: [{role, content}]</code> — <code>content</code> must be a string; multipart content deferred</li>
-  <li><code>temperature</code>, <code>max_tokens</code>, <code>top_p</code>, <code>stop</code> — passed through unchanged</li>
-  <li><code>stream: false</code> — <code>true</code> rejected with 400 in v1</li>
-</ul>
-<p>Response matches OpenAI's schema with <code>choices[*].message.content</code> rehydrated.</p>
+<h3><code>POST /redact</code></h3>
+
+<p>Request body:</p>
+<pre>
+{
+  "text": "Update patient John Doe, MRN 12345.",
+  "token_map": {                  // optional; pass back what /redact returned previously
+    "[PERSON_1]": "Jane Roe"
+  },
+  "language": "en"                // optional; defaults to "en"
+}
+</pre>
+
+<p>Response body:</p>
+<pre>
+{
+  "redacted_text": "Update patient [PERSON_2], MRN [US_DRIVER_LICENSE_1].",
+  "token_map": {
+    "[PERSON_1]": "Jane Roe",
+    "[PERSON_2]": "John Doe",
+    "[US_DRIVER_LICENSE_1]": "12345"
+  }
+}
+</pre>
+
+<p>Errors: <code>400</code> on malformed body or token-shaped substring in input (see threat T6); <code>413</code> if the body exceeds the configured size cap; <code>500</code> on engine failure.</p>
+
+<h3><code>POST /unredact</code></h3>
+
+<p>Request body:</p>
+<pre>
+{
+  "text": "I updated [PERSON_2]'s record.",
+  "token_map": {
+    "[PERSON_2]": "John Doe"
+  }
+}
+</pre>
+
+<p>Response body:</p>
+<pre>
+{
+  "text": "I updated John Doe's record."
+}
+</pre>
+
+<p>Behavior on a token in the text that isn't in the map: left as-is. Callers may treat that as a warning signal that an unknown token leaked through.</p>
 
 <h3><code>GET /healthz</code></h3>
 <p>Returns <code>{"status": "ok"}</code> once the analyzer model is loaded.</p>
 
-<h2>Threat model</h2>
+<h2 id="threat-model">Threat model</h2>
 
 <table>
   <thead>
     <tr><th>#</th><th>Threat</th><th>Mitigation</th><th>Status</th></tr>
   </thead>
   <tbody>
-    <tr><td>T1</td><td>PHI reaches the LLM in a user prompt</td><td>Redactor strips before forwarding; this is the core function</td><td>Core</td></tr>
-    <tr><td>T2</td><td>PHI leaks via proxy request/response logs</td><td>No request/response body logging in default config; structured logs use token-form only; explicit redactor sanity-check on any field that <em>could</em> contain raw text before it reaches a log sink</td><td>Core</td></tr>
-    <tr><td>T3</td><td>PHI leaks via panic/crash dumps or debug traces</td><td>Crash handlers must scrub message bodies before emitting; debug/verbose log levels are off in production by default</td><td>Open — needs implementation pattern</td></tr>
-    <tr><td>T4</td><td>PHI leaks via upstream LLM provider telemetry</td><td>Upstream is self-hosted; no third-party endpoints in v1</td><td>Core</td></tr>
-    <tr><td>T5</td><td>PHI leaks via redactor false negative</td><td>Bounded by Presidio's recall; tracked under &ldquo;Redaction quality targets&rdquo; below — recall target, eval harness, confidence-threshold tuning</td><td>Open — gated on quality targets</td></tr>
-    <tr><td>T6</td><td>Token collision (an identifier that already looks like our placeholder)</td><td>Token format <code>[TYPE_N]</code> is unlikely in clinical text; pre-scan inputs and either reject or escape any pre-existing token-shaped substrings</td><td>Open — implementation detail for M1</td></tr>
-    <tr><td>T7</td><td>Model-emitted PII (model invents a name not in the input)</td><td>Optionally run the redactor on assistant responses too. Trades a second NER pass for an extra layer of defense. Deferred — see open question #2</td><td>Deferred to post-MVP</td></tr>
-    <tr><td>T8</td><td>Insider with shell access to the proxy host can capture raw PHI in-flight</td><td>Out of scope for the proxy itself; mitigated by host-level access controls, audit logging, and least-privilege deploys. Document this boundary clearly so operators understand the trust assumption</td><td>Boundary — documented, not solved by code</td></tr>
-    <tr><td>T9</td><td>Upstream LLM auth token or other secrets leak via env, logs, or core dumps</td><td>Read secrets from a secret manager (not env vars baked into images); never log header values; structured config redacts secret-keyed fields</td><td>Open — pick secret-management approach</td></tr>
-    <tr><td>T10</td><td>Supply-chain compromise of the spaCy model or a Presidio dependency</td><td>Pin exact versions and hashes of the model file and Python deps; reproducible build; consider an internal mirror of the model artifact</td><td>Open — pin policy, mirror decision</td></tr>
-    <tr><td>T11</td><td>DoS via oversized message bodies that explode the NER pass</td><td>Cap per-message and per-request size; reject above threshold with 413; surface metrics on input size distribution</td><td>Open — pick thresholds</td></tr>
-    <tr><td>T12</td><td>Response caching (anywhere in the stack) outlives the per-request token map and rehydrates with stale or empty mappings</td><td>No caching layer in v1; if introduced later, cache key must scope to the <em>post-rehydration</em> response, not the upstream's tokenized response</td><td>Open — block any caching addition without a design</td></tr>
-    <tr><td>T13</td><td>Token cardinality side-channel — the upstream model sees <code>[PERSON_1]</code> … <code>[PERSON_5]</code> and can infer the count of distinct patients in a session</td><td>Accept and document; mitigation (e.g. random token IDs) costs reasoning quality. Not exploitable without other access</td><td>Accepted</td></tr>
-    <tr><td>T14</td><td>Tampered/malicious client bypasses redaction by claiming pre-redacted input</td><td>Proxy always runs the redactor regardless of client-asserted state; no &ldquo;already redacted, skip&rdquo; path</td><td>Core</td></tr>
+    <tr><td>T1</td><td>Caller passes raw identifiers in <code>text</code> — the redactor misses some and they appear in the response</td><td>Bounded by Presidio's recall; tracked under <a href="#redaction-quality-targets">Redaction quality targets</a></td><td>Core — gated on quality targets</td></tr>
+    <tr><td>T2</td><td>Identifiers leak via service request/response logs</td><td>No request/response body logging in default config; structured logs use token-form only or omit body entirely; any log enrichment that touches request fields runs the redactor first</td><td>Core</td></tr>
+    <tr><td>T3</td><td>Identifiers leak via panic/crash dumps or debug traces</td><td>Crash handlers must scrub message bodies before emitting; debug/verbose log levels are off in production by default</td><td>Open — needs implementation pattern</td></tr>
+    <tr><td>T4</td><td><strong>Chat app forgets (or refuses) to call <code>/redact</code> and sends raw text directly to an LLM.</strong> Under the redaction-service model the service is not in the traffic path; it cannot enforce its own use.</td><td>Cannot mitigate inside the service. Lives outside: code review of all integration paths between chat app and any LLM client; integration tests that assert no path from user input to LLM call skips <code>/redact</code>; optional separate enforcement at the LLM ingress (e.g. a network policy or egress filter that blocks outbound traffic containing recognizable PII patterns).</td><td>Core — documented boundary, not solved by code in this service</td></tr>
+    <tr><td>T5</td><td>Token collision — an input already contains a substring that looks like one of our tokens</td><td>Pre-scan input for the <code>[A-Z_]+_\d+]</code> pattern; <code>400</code> on hit, with a message explaining the constraint. Document the format so callers can avoid it.</td><td>Open — implementation detail for M1</td></tr>
+    <tr><td>T6</td><td>Caller mishandles the returned token map — logs it, persists it without encryption, ships it to another service</td><td>The token map is sensitive (it's literally <code>{token: original}</code>). Document its sensitivity prominently in the API docs. Callers should treat the map as the same trust level as the raw input.</td><td>Open — documentation responsibility; consider returning a warning header</td></tr>
+    <tr><td>T7</td><td>Insider with shell access to the service host can capture raw identifiers in-flight</td><td>Out of scope for the service itself; mitigated by host-level access controls, audit logging, least-privilege deploys. Documented boundary.</td><td>Boundary — documented, not solved by code</td></tr>
+    <tr><td>T8</td><td>Supply-chain compromise of the spaCy model or a Presidio dependency</td><td>Pin exact versions and hashes; reproducible build; internal mirror of the model artifact</td><td>Open — pin policy, mirror decision</td></tr>
+    <tr><td>T9</td><td>DoS via oversized request bodies that explode the NER pass</td><td>Cap request body size; reject above threshold with <code>413</code>; surface metrics on input size distribution</td><td>Open — pick thresholds</td></tr>
+    <tr><td>T10</td><td>Token cardinality side-channel — a downstream LLM seeing <code>[PERSON_1]</code> … <code>[PERSON_5]</code> can infer how many distinct people the caller's conversation references</td><td>Accept and document; mitigation (e.g. randomized token IDs) costs LLM reasoning quality. The caller can mitigate further by rotating maps per session.</td><td>Accepted</td></tr>
   </tbody>
 </table>
 
-<h2>Redaction quality targets</h2>
+<p><em>Removed from the prior threat model after the <a href="decisions/0002-service-shape.html">ADR 0002</a> service-shape change:</em> rows for upstream LLM telemetry, model-emitted PII, and upstream LLM auth tokens. The service no longer talks to LLMs, so those threats are out of its scope.</p>
 
-<p>The proxy's only safety promise is that PHI does not reach the model. That promise is bounded by the redactor's <strong>recall</strong> on PHI entity types. Precision matters too — over-redaction degrades the LLM's answer — but recall is the hard constraint.</p>
+<h2 id="redaction-quality-targets">Redaction quality targets</h2>
+
+<p>The service's only safety promise is that identifiers in the input do not appear in <code>redacted_text</code> in the response. That promise is bounded by the redactor's <strong>recall</strong>. Precision matters too (over-redaction breaks downstream LLM reasoning) but recall is the hard constraint.</p>
 
 <h3>What we measure</h3>
 <ul>
-  <li><strong>Per-entity recall</strong> — for each HIPAA Safe Harbor entity type (names, geographic subdivisions smaller than a state, dates more specific than year, phone/fax, email, SSN, MRN, account/license numbers, vehicle/device identifiers, URLs, IPs, biometric identifiers, full-face photos, &ldquo;any other unique identifying number, characteristic, or code&rdquo;), the fraction of true positives the redactor catches at the chosen confidence threshold.</li>
+  <li><strong>Per-entity recall</strong> — for each entity type the deployment cares about (often the HIPAA Safe Harbor list as a starting set: names, geographic subdivisions smaller than a state, dates more specific than year, phone/fax, email, SSN, MRN, account/license numbers, vehicle/device identifiers, URLs, IPs, biometric identifiers, &ldquo;any other unique identifying number, characteristic, or code&rdquo;), the fraction of true positives the redactor catches at the chosen confidence threshold.</li>
   <li><strong>Per-entity precision</strong> — for each entity type, the fraction of redactions that were correct.</li>
-  <li><strong>Span-level F1</strong> — using span boundaries, not token boundaries (a partial match that leaves part of a name visible counts as a miss).</li>
-  <li><strong>End-to-end leakage rate</strong> — over a labelled corpus, the fraction of inputs where <em>any</em> PHI span escaped redaction. This is the number the compliance review will actually care about.</li>
+  <li><strong>Span-level F1</strong> — by character offset, not token boundary (a partial match that leaves part of a name visible counts as a miss).</li>
+  <li><strong>End-to-end leakage rate</strong> — over a labelled corpus, the fraction of inputs where <em>any</em> entity span escaped redaction. This is what a compliance review will care about.</li>
 </ul>
 
 <h3>Targets (proposed, to be confirmed)</h3>
@@ -201,20 +248,20 @@ return to client
     <tr><th>Metric</th><th>Target</th></tr>
   </thead>
   <tbody>
-    <tr><td>End-to-end leakage rate (any PHI escape)</td><td><strong>≤ 1 in 10,000</strong> prompts on the eval corpus</td></tr>
+    <tr><td>End-to-end leakage rate (any entity escape)</td><td><strong>≤ 1 in 10,000</strong> inputs on the eval corpus</td></tr>
     <tr><td>Per-entity recall (Safe Harbor types)</td><td><strong>≥ 0.99</strong></td></tr>
-    <tr><td>Per-entity precision</td><td><strong>≥ 0.90</strong> (lower acceptable; over-redaction degrades UX but doesn't violate HIPAA)</td></tr>
-    <tr><td>p95 redaction latency for a 500-token message</td><td><strong>≤ 50 ms</strong> on the target deployment hardware</td></tr>
+    <tr><td>Per-entity precision</td><td><strong>≥ 0.90</strong> (lower acceptable; over-redaction degrades downstream UX but doesn't violate compliance)</td></tr>
+    <tr><td>p95 <code>/redact</code> latency for a 500-token message</td><td><strong>≤ 50 ms</strong> on the target deployment hardware</td></tr>
   </tbody>
 </table>
-<p>These numbers are starting points — they need stakeholder sign-off (especially the leakage rate) before M1 can exit.</p>
+<p>These numbers are starting points — they need stakeholder sign-off (especially the leakage rate) before M1 can exit. The latency number is sharper now than under the prior proxy design: it's the whole user-perceived call, not added cost on top of an LLM round-trip.</p>
 
 <h3>Evaluation corpus</h3>
 <p>We need a labelled dataset to measure against. Options, in order of effort:</p>
 <ol>
-  <li><strong>Synthetic clinical prompts</strong> generated by a script that composes realistic patient narratives with span-annotated PHI. Cheap to build; coverage matches what we choose to generate (and we'll over-fit to it if we're not careful).</li>
-  <li><strong>Public PHI benchmark sets</strong> (e.g. i2b2/n2c2 de-identification challenges) under their data-use agreements. Higher signal; data-use review required.</li>
-  <li><strong>Held-out internal real corpus</strong>, sampled from production with proper PHI-handling controls. Highest signal; requires a separate data-handling protocol that itself needs review.</li>
+  <li><strong>Synthetic prompts</strong> covering all target domains (healthcare, finance, legal, GDPR, etc.) with span-annotated identifiers. Cheap to build; coverage matches what we choose to generate.</li>
+  <li><strong>Public PII/PHI benchmark sets</strong> (e.g. i2b2/n2c2 de-identification challenges) under their data-use agreements. Higher signal; data-use review required.</li>
+  <li><strong>Held-out internal real corpus</strong>, sampled from production with proper PII-handling controls. Highest signal; requires a separate data-handling protocol.</li>
 </ol>
 <p>Building (1) is a deliverable of its own. Treat the synthetic corpus and its labelling rubric as a separate artifact under <code>evals/</code> (path TBD pending language decision).</p>
 
@@ -225,7 +272,7 @@ return to client
   <li>Re-run the full eval on every change to recognizer config or confidence threshold. Treat it as a regression gate, not a one-time benchmark.</li>
 </ul>
 
-<h2>Deployment target</h2>
+<h2 id="deployment-target">Deployment target</h2>
 
 <p>This section is a sketch — the final choice is open question #5 below and needs stakeholder input on existing infrastructure.</p>
 
@@ -235,43 +282,43 @@ return to client
     <tr><th>Topology</th><th>Sketch</th><th>Implications</th></tr>
   </thead>
   <tbody>
-    <tr><td><strong>k8s sidecar</strong> to the chat backend</td><td>One <code>prompt-redact</code> container alongside the chat service in the same pod; chat service talks to it over localhost</td><td>Per-pod scaling, no network hop, no service-mesh policy needed for the call. Bigger pod image.</td></tr>
-    <tr><td><strong>Standalone k8s service</strong></td><td><code>prompt-redact</code> deployment fronted by a ClusterIP service; chat backend calls it over the in-cluster network</td><td>Independent scaling, but adds a network hop and needs mesh-level mTLS / network policy to keep PHI off the wire in cleartext.</td></tr>
-    <tr><td><strong>VM / bare host</strong></td><td>One or more VMs running the proxy directly</td><td>Simplest if there's no orchestrator. Manual scaling, manual rolling deploys.</td></tr>
-    <tr><td><strong>On-device / edge</strong></td><td>Runs at the client edge (e.g. a clinical workstation)</td><td>Best latency, hardest deploy and update story; model size is a real constraint at the edge.</td></tr>
+    <tr><td><strong>k8s sidecar</strong> to the caller</td><td>One <code>prompt-redact</code> container alongside the chat (or other) service in the same pod; caller talks to it over localhost</td><td>Per-pod scaling, no network hop, no service-mesh policy needed for the call. Bigger pod image. Easy answer for a single dominant caller.</td></tr>
+    <tr><td><strong>Standalone k8s service</strong></td><td><code>prompt-redact</code> deployment fronted by a ClusterIP service; multiple callers share it</td><td>Best when more than one caller needs redaction (chat + batch + indexer). Adds a network hop; needs mesh-level mTLS / network policy to keep input cleartext off the wire.</td></tr>
+    <tr><td><strong>VM / bare host</strong></td><td>One or more VMs running the service directly</td><td>Simplest if there's no orchestrator. Manual scaling, manual rolling deploys.</td></tr>
+    <tr><td><strong>On-device / edge</strong></td><td>Runs at the caller's edge (e.g. a clinical workstation, a laptop)</td><td>Best latency, hardest deploy and update story; model size is a real constraint at the edge.</td></tr>
   </tbody>
 </table>
 
 <h3>Common implications regardless of topology</h3>
 <ul>
-  <li>The proxy is stateless per request, so horizontal scaling is trivial.</li>
-  <li>Cold start is non-trivial — the NER model takes seconds to load. Readiness probe must wait for the model to load, not just for the HTTP socket to open. Autoscaling tuning must account for the warm-up.</li>
+  <li>The service is stateless per request, so horizontal scaling is trivial.</li>
+  <li>Cold start is non-trivial — the NER model takes seconds to load. Readiness probe must wait for the model to load, not just for the HTTP socket to open.</li>
   <li>Container image size is dominated by the spaCy/transformer model. Expect hundreds of MB. Worth a registry mirror inside the trust boundary.</li>
-  <li>Secret material (upstream LLM auth tokens) reaches the proxy somehow — needs to integrate with whatever secret manager the deployment target uses. Don't bake into images.</li>
 </ul>
 
 <h3>Open question for stakeholders</h3>
-<p>What's the surrounding infrastructure? k8s? VMs? Edge? The answer drives the M5 deliverables and the threat-model rows for T9 (secrets) and T10 (supply chain).</p>
+<p>What's the surrounding infrastructure? k8s? VMs? Edge? The answer drives the M5 deliverables and the supply-chain row (T8) in the threat model.</p>
 
 <h2>Alternatives considered</h2>
 <ul>
-  <li><strong>Cloud DLP (GCP / AWS Macie).</strong> Higher accuracy on medical data, managed, but adds network latency and per-request cost, and routes PHI to a third party. Ruled out by HIPAA posture for v1.</li>
-  <li><strong>Philter (self-hosted PHI proxy).</strong> Purpose-built for the use case. Deferred in favor of Presidio for customizability, community size, and a richer recognizer ecosystem.</li>
-  <li><strong>Browser-side NER (e.g. <code>compromise.cool</code>).</strong> Reduces network exposure but the client becomes a trust boundary — a tampered client can ship raw PHI. We keep the proxy as the authoritative chokepoint; browser-side scrubbing can be added later as defense-in-depth.</li>
+  <li><strong>Transparent OpenAI-compatible proxy</strong> (the original M0 design). Reversed in <a href="decisions/0002-service-shape.html">ADR 0002</a> — most redactions don't need to go through an LLM, so a proxy is the wrong shape.</li>
+  <li><strong>Cloud DLP (GCP / AWS Macie).</strong> Higher accuracy on medical/financial data, managed, but adds network latency and per-request cost, and routes input to a third party. Ruled out by the on-prem requirement.</li>
+  <li><strong>Philter (self-hosted PHI proxy).</strong> Purpose-built for the use case but proxy-shaped. Deferred in favor of Presidio for customizability and community.</li>
+  <li><strong>Browser-side NER (e.g. <code>compromise.cool</code>).</strong> Reduces network exposure but the client becomes a trust boundary — a tampered client can ship raw input. We keep the redactor as a server-side authoritative call; browser-side scrubbing could be added later as defense-in-depth.</li>
 </ul>
 
 <h2>Open questions</h2>
 <ol start="0">
-  <li><strong>Implementation language.</strong> Presidio is a Python library, so the realistic options are: (a) write the whole proxy in Python; (b) run Presidio as a sidecar gRPC/HTTP service and write the proxy in Go / Rust / Node / etc.; (c) reconsider the engine choice if the team has a strong non-Python preference. Blocks every other code-level decision. See <a href="decisions/0001-language-and-topology.html">ADR 0001</a>.</li>
-  <li><strong>Streaming.</strong> Token reassembly across SSE chunks needs a buffered rehydrator (a token like <code>[PERSON_1]</code> can be split across chunks). Probably a small state machine that holds back any partial <code>[...</code> until it sees <code>]</code> or proves it isn't a token. Punted to a post-MVP milestone.</li>
-  <li><strong>Model-emitted identifiers.</strong> If the model hallucinates a name that isn't in the token map, we won't redact it on the way out. Should we run the redactor on assistant responses too, or trust the upstream model to behave when only given tokens? Needs a decision before v1 ships to clinical users.</li>
-  <li><strong>Multipart message content.</strong> OpenAI's newer schema allows <code>content</code> as a list of text/image parts. v1 strings only; multipart deferred.</li>
-  <li><strong>Confidence thresholds.</strong> Presidio returns scores; the cutoff trades recall (more aggressive redaction) for precision (less spurious masking that confuses the model). Needs a small eval set of synthetic clinical prompts.</li>
-  <li><strong>Token uniqueness across speakers.</strong> If both the user and a system message reference &ldquo;John Doe&rdquo;, we want one token, not two. Current plan handles this (map keyed by original string), but worth a test fixture.</li>
-  <li><strong>What to do when redaction would empty a message.</strong> A message that is <em>only</em> a phone number becomes <code>[PHONE_NUMBER_1]</code> — fine. But edge cases like a system prompt that's pure identifiers may degrade the LLM call. Probably accept and document.</li>
-  <li><strong>Deployment target</strong> (sidecar vs standalone vs VM vs edge) — see &ldquo;Deployment target&rdquo; section above. Needs stakeholder input on existing infrastructure.</li>
-  <li><strong>Recall/precision targets — confirmed numbers.</strong> The targets above are proposed; the leakage-rate number in particular needs compliance sign-off before M1 can exit.</li>
+  <li><strong>Implementation language.</strong> See <a href="decisions/0001-language-and-topology.html">ADR 0001</a>. Blocks every code-level decision.</li>
+  <li><strong>Confidence thresholds.</strong> Presidio returns scores; the cutoff trades recall (more aggressive redaction) for precision (less spurious masking). Needs the eval corpus.</li>
+  <li><strong>Token-map shape as a long-lived contract.</strong> Because callers persist the map across calls, its format is a contract we have to honor (or version). Decide: stable JSON shape now? Versioned envelope? Allow extension fields?</li>
+  <li><strong>Should <code>/redact</code> accept per-call configuration?</strong> e.g. an entity-type allow-list, additional regexes, language hint per call. Useful for multi-domain deployments (the chat app knows it's in &ldquo;finance mode&rdquo;) but expands the surface.</li>
+  <li><strong>What to do when redaction would empty the input.</strong> A request whose <code>text</code> is <em>only</em> a phone number becomes <code>"[PHONE_NUMBER_1]"</code> — fine. But edge cases (a system prompt that's pure identifiers) may degrade downstream LLM use. Probably accept and document.</li>
+  <li><strong>Deployment target.</strong> See <a href="#deployment-target">Deployment target</a> above.</li>
+  <li><strong>Recall/precision targets — confirmed numbers.</strong> The proposed numbers above need compliance sign-off before M1 can exit.</li>
 </ol>
+
+<p><em>Dropped from the prior open-questions list after <a href="decisions/0002-service-shape.html">ADR 0002</a>:</em> streaming SSE rehydration (we don't see LLM responses), model-emitted identifiers (same reason), multipart message content (<code>/redact</code> takes plain text).</p>
 
 </body>
 </html>

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ADR 0002 — Service shape: redaction microservice (not LLM proxy)</title>
+</head>
+<body>
+
+<h1>ADR 0002 — Service shape: redaction microservice (not LLM proxy)</h1>
+
+<ul>
+  <li><strong>Status:</strong> Accepted</li>
+  <li><strong>Date opened:</strong> 2026-05-30</li>
+  <li><strong>Owners:</strong> rick-johnn</li>
+  <li><strong>Supersedes:</strong> The M0 decision recorded as &ldquo;OpenAI-compatible chat completions endpoint&rdquo; in <a href="../PLAN.html">PLAN.html</a>'s decision log.</li>
+  <li><strong>Superseded by:</strong> —</li>
+</ul>
+
+<h2>Context</h2>
+
+<p>The M0 design picked an <strong>OpenAI-compatible chat completions endpoint</strong> as the public surface. In that model the service is a transparent proxy: chat clients change their base URL, the service intercepts each request, redacts the prompt, forwards to an upstream LLM, and rehydrates the response on the way back. Every request to the service maps 1:1 to an LLM call.</p>
+
+<p>On 2026-05-30 the user clarified the actual need: <em>not every request makes the LLM call</em>. The redaction step should be invocable on its own, before the chat application decides what to do next (call an LLM, log the text, throw it away, show it back to the user for editing, etc.). The chat application is the orchestrator. Redaction is a service it calls — not a hop traffic transits through.</p>
+
+<p>This is the third option originally surfaced during M0 (&ldquo;Plain <code>/redact</code> + <code>/unredact</code> endpoints — library-style&rdquo;), which had been ruled against in favor of the OpenAI-compatible surface. That earlier decision is being reversed.</p>
+
+<h2>Decision</h2>
+
+<p>The service is a <strong>redaction-only microservice</strong>. It exposes:</p>
+
+<ul>
+  <li><code>POST /redact</code> — accepts text and an optional existing token map; returns redacted text and an updated token map.</li>
+  <li><code>POST /unredact</code> — accepts text and a token map; returns text with tokens substituted back to originals.</li>
+  <li><code>GET /healthz</code> — liveness.</li>
+</ul>
+
+<p>It does <em>not</em>:</p>
+
+<ul>
+  <li>Know about LLM backends. There is no &ldquo;Upstream client&rdquo; component.</li>
+  <li>Handle LLM authentication, headers, or schemas.</li>
+  <li>Implement any OpenAI-compatible surface in v1.</li>
+  <li>Maintain server-side session state. Token maps are <strong>caller-owned</strong> and round-tripped on each call.</li>
+</ul>
+
+<p>The chat application is responsible for: calling <code>/redact</code> before any downstream use of the text; storing the returned token map for the lifetime of the conversation; passing it back on subsequent <code>/redact</code> calls (for cross-turn consistency); and calling <code>/unredact</code> on LLM responses if it wants the user to see real identifiers.</p>
+
+<h2>Why the flip</h2>
+
+<ul>
+  <li><strong>Use cases don't map 1:1 to LLM calls.</strong> Many redactions happen for non-LLM reasons: showing the user what would be sent, logging to an internal store, indexing for retrieval, archiving. A transparent proxy forces every redaction through an LLM round-trip, which is the wrong shape.</li>
+  <li><strong>Composability.</strong> A redaction microservice is a building block. The chat app, a batch job, an audit pipeline, and an eval harness can all call it for their own purposes without each of them having to pretend to be an LLM caller.</li>
+  <li><strong>Smaller threat surface.</strong> The service never holds LLM auth tokens, never sees LLM responses, never logs LLM telemetry. Three rows come out of the threat model.</li>
+  <li><strong>Cleaner trust model.</strong> The chat application is the trusted orchestrator. The service is a stateless function. There is no implicit guarantee that traffic to an LLM has been redacted — that's the chat app's contract to honor.</li>
+</ul>
+
+<h2>Consequences</h2>
+
+<h3>What's removed</h3>
+<ul>
+  <li>The &ldquo;Upstream client&rdquo; component in <a href="../ARCHITECTURE.html">ARCHITECTURE.html</a>.</li>
+  <li>OpenAI-compat schema handling in the service.</li>
+  <li>Streaming SSE handling (M3 in the original plan) — we don't see LLM responses, so there's nothing to stream-rehydrate. <code>/redact</code> input is a string; if very-large inputs become an issue, that's a separate optimization, not v1 scope.</li>
+  <li>Multipart message content concerns (open question #3 in the old ARCHITECTURE) — <code>/redact</code> takes plain text.</li>
+  <li>Threat model rows that depended on the service touching upstream LLMs (T4 upstream telemetry; T7 model-emitted PII; T9 upstream auth tokens).</li>
+</ul>
+
+<h3>What stays</h3>
+<ul>
+  <li>The redactor itself (Presidio analyzer + token assignment).</li>
+  <li>The token format (<code>[TYPE_N]</code>) and rationale.</li>
+  <li>Per-call (per-request) token-map scoping. Now <strong>caller-owned</strong> rather than service-held.</li>
+  <li>Redaction quality targets (recall, precision, leakage rate, latency).</li>
+  <li>Hybrid regex + NER performance path.</li>
+  <li>The implementation-language ADR (<a href="0001-language-and-topology.html">0001</a>) — Presidio is still Python; the topology choice is unchanged in shape.</li>
+  <li>Deployment target sketch.</li>
+</ul>
+
+<h3>What gets stronger</h3>
+<ul>
+  <li><strong>The &ldquo;tampered/forgetful client&rdquo; threat.</strong> Under the old proxy model the service was an unavoidable hop; clients couldn't bypass it without changing their base URL. Under this model the chat app must <em>actively choose</em> to call <code>/redact</code>. A buggy or malicious chat app that forgets the call leaks PII directly to the LLM. The service cannot prevent this — it can only be present when called. Mitigation lives outside the service: code review of chat-app integration paths, optional separate enforcement at the LLM ingress, integration tests that verify the chat app never sends raw input to the LLM.</li>
+  <li><strong>Token-map handling on the caller side.</strong> The caller is now responsible for storing and protecting the token map for the lifetime of a conversation. The map contains the raw identifiers (it's literally <code>{token: original}</code>). Treat it as sensitive data on the caller side.</li>
+</ul>
+
+<h3>What gets sharper (latency)</h3>
+<p>Under the old design, <code>≤ 50 ms p95</code> for a 500-token message was the <em>added</em> cost on top of an LLM call that already took hundreds of ms. Under this design it's the <em>whole</em> user-perceived round-trip when the chat app calls <code>/redact</code> from a hot path (e.g. on submit, or on debounced typing). Same number is probably still the right target, but it now has less headroom — see <a href="../ARCHITECTURE.html#redaction-quality-targets">ARCHITECTURE — Redaction quality targets</a>.</p>
+
+<h2>Alternatives considered (and not picked)</h2>
+
+<ul>
+  <li><strong>Keep OpenAI-compat as a secondary surface alongside <code>/redact</code>.</strong> Rejected: doubles the API surface and the threat model for callers who, by the user's own description, don't want it. If a future caller wants transparent proxying, they can build it as a thin wrapper around <code>/redact</code>.</li>
+  <li><strong>Server-held sessions for token-map continuity across turns.</strong> Rejected: adds state, eviction policy, a new failure mode, and a new surface to threat-model. Caller-owned maps shift the burden one hop but keep the service stateless and trivially horizontally scalable.</li>
+  <li><strong>Make <code>/unredact</code> the caller's responsibility (return the map from <code>/redact</code>; let callers substitute themselves).</strong> Considered but rejected: substitution is non-trivial (token collision, escape rules, partial matches across boundaries). Centralizing it in <code>/unredact</code> keeps the rules in one place.</li>
+</ul>
+
+<h2>References</h2>
+<ul>
+  <li><a href="0001-language-and-topology.html">ADR 0001</a> — Implementation language and process topology (unchanged in scope)</li>
+  <li><a href="../ARCHITECTURE.html">ARCHITECTURE.html</a> — being rewritten to match this decision</li>
+  <li><a href="../PLAN.html">PLAN.html</a> — M2 renamed from &ldquo;Proxy MVP&rdquo; to &ldquo;Redaction service MVP&rdquo;; M3 streaming dropped from v1 scope</li>
+</ul>
+
+</body>
+</html>

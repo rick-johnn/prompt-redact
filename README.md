@@ -1,8 +1,10 @@
 # prompt-redact
 
-An on-prem PII redaction proxy that sits between chat clients and an LLM backend. The proxy strips identifiers from user prompts before they reach the model and rehydrates them in the model's response, so the LLM never sees raw personal data while the user still gets a readable answer.
+An on-prem PII redaction microservice that calling applications invoke explicitly on text they want anonymized. The service exposes `POST /redact` (text → redacted text + token map) and `POST /unredact` (text + token map → rehydrated text). It does **not** proxy LLM calls — the caller decides whether to send redacted text to an LLM, log it, index it, throw it away, or show it back to the user.
 
 > **Status:** Design and planning. No implementation yet. See [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) and [`docs/PLAN.html`](docs/PLAN.html).
+>
+> The service shape changed on 2026-05-30 from a transparent OpenAI-compatible proxy to a standalone redaction microservice. See [`docs/decisions/0002-service-shape.html`](docs/decisions/0002-service-shape.html).
 
 ## Why
 
@@ -24,28 +26,32 @@ Sending that text directly to an LLM — especially a hosted one — creates com
 ## Shape of the system
 
 ```
-┌────────┐   raw prompt    ┌──────────────────┐   anonymized prompt   ┌─────────┐
-│ Client │ ──────────────▶ │ prompt-redact    │ ────────────────────▶ │ LLM     │
-│        │ ◀────────────── │ (proxy)          │ ◀──────────────────── │ backend │
-└────────┘  rehydrated     └──────────────────┘  anonymized response  └─────────┘
-            response
-                                 │
-                                 ▼
-                       per-request token map
-                       (e.g. [PERSON_1] → "John Doe")
+       ┌────────────────────────┐
+       │  Caller                │   (chat app, batch job, indexer,
+       │  - owns the token map  │    eval harness, audit pipeline…)
+       │  - orchestrates        │
+       └────────┬───────┬───────┘
+                │       │
+   POST /redact │       │ POST /unredact
+                ▼       ▼
+       ┌────────────────────────┐
+       │  prompt-redact         │   (stateless; no LLM in the picture)
+       │  Presidio + token map  │
+       └────────────────────────┘
 ```
 
-The proxy exposes an **OpenAI-compatible `/v1/chat/completions`** endpoint so existing clients change only their base URL.
+The caller is responsible for storing the returned token map for the lifetime of a conversation, passing it back on subsequent `/redact` calls (for cross-turn consistency), and calling `/unredact` on LLM responses if they want to rehydrate identifiers for the user. The service itself is stateless.
 
 ## Architectural choices (locked for v1)
 
 | Decision | Choice |
 |---|---|
+| Service shape | Redaction microservice (`/redact` + `/unredact`); not an LLM proxy. See [ADR 0002](docs/decisions/0002-service-shape.html). |
 | Hosting | On-prem / self-hosted only (no third-party APIs in the redaction path — required for HIPAA, PCI-DSS, GDPR-strict, and similar regimes) |
 | Redaction engine | [Microsoft Presidio](https://github.com/microsoft/presidio) |
-| Public API | OpenAI-compatible chat completions |
-| Reversibility | Reversible via per-request token map |
-| Implementation language | **TBD** — Presidio is Python, so the realistic options are full-Python or Presidio-as-sidecar + proxy in another language |
+| Token map ownership | Caller-owned; round-tripped on each call. The service holds no per-caller state. |
+| Reversibility | Reversible via `[TYPE_N]` tokens and an explicit `/unredact` endpoint |
+| Implementation language | **TBD** — Presidio is Python, so the realistic options are full-Python or Presidio-as-sidecar + service in another language. See [ADR 0001](docs/decisions/0001-language-and-topology.html). |
 
 Cloud DLP (GCP / AWS Macie) and Philter were considered and deferred. See [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html#alternatives-considered).
 
@@ -53,9 +59,10 @@ Cloud DLP (GCP / AWS Macie) and Philter were considered and deferred. See [`docs
 
 Project documentation under `docs/` is authored in HTML, not markdown (see [`CLAUDE.md`](CLAUDE.md#documentation-format)). Markdown is reserved for `README.md`, `CLAUDE.md`, and `skills/*/SKILL.md`.
 
-- [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) — components, data flow, threat model, redaction quality targets, deployment-target sketch, alternatives, open questions
+- [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) — components, API surface, data flow, threat model, redaction quality targets, deployment-target sketch, alternatives, open questions
 - [`docs/PLAN.html`](docs/PLAN.html) — milestones from M0 (design freeze) through MVP and beyond
 - [`docs/decisions/0001-language-and-topology.html`](docs/decisions/0001-language-and-topology.html) — ADR (status: Proposed) for the language and process-topology decision
+- [`docs/decisions/0002-service-shape.html`](docs/decisions/0002-service-shape.html) — ADR (status: Accepted) for the pivot from transparent LLM proxy to redaction microservice
 - [`CLAUDE.md`](CLAUDE.md) — instructions for Claude Code when working in this repo
 - [`skills/karpathy-guidelines/SKILL.md`](skills/karpathy-guidelines/SKILL.md) — vendored coding guidelines
 

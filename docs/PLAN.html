@@ -13,18 +13,19 @@
 <h2>M0 — Design freeze <em>(current)</em></h2>
 
 <ul>
-  <li>[x] Architectural decisions recorded in <a href="ARCHITECTURE.html">ARCHITECTURE.html</a>: on-prem, Presidio, OpenAI-compatible, reversible per-request token map.</li>
+  <li>[x] Architectural decisions recorded in <a href="ARCHITECTURE.html">ARCHITECTURE.html</a>: on-prem, Presidio, reversible token map, caller-owned map.</li>
   <li>[x] Karpathy guidelines vendored into <code>skills/karpathy-guidelines/</code>.</li>
   <li>[x] Repo initialized; <code>CLAUDE.md</code> orienting future sessions.</li>
   <li>[x] GitHub remote created: <code>rick-johnn/prompt-redact</code> (private).</li>
-  <li>[x] Threat model expanded to cover insider risk, log discipline, secrets, supply chain, DoS, caching, and side-channels.</li>
+  <li>[x] Threat model expanded to cover insider risk, log discipline, supply chain, DoS, and side-channels.</li>
   <li>[x] Redaction quality targets drafted (recall, precision, leakage rate, latency) with eval-corpus options.</li>
   <li>[x] Deployment-target sketch added with candidate topologies (sidecar / standalone / VM / edge).</li>
   <li>[x] Documentation format convention adopted: <code>docs/</code> is HTML; markdown reserved for <code>README.md</code>, <code>CLAUDE.md</code>, <code>skills/*/SKILL.md</code>.</li>
+  <li>[x] <strong>Service shape pivot</strong> recorded in <a href="decisions/0002-service-shape.html">ADR 0002</a>: redaction-only microservice with <code>/redact</code> + <code>/unredact</code>; no LLM proxying.</li>
   <li>[ ] <strong>Pick implementation language and topology.</strong> See <a href="decisions/0001-language-and-topology.html">ADR 0001</a>. Blocks every milestone below.</li>
   <li>[ ] <strong>Confirm redaction quality targets.</strong> The leakage-rate number in particular needs compliance sign-off. See <a href="ARCHITECTURE.html#redaction-quality-targets">ARCHITECTURE.html — Redaction quality targets</a>.</li>
   <li>[ ] <strong>Pick deployment target.</strong> Needs stakeholder input on existing infrastructure. See <a href="ARCHITECTURE.html#deployment-target">ARCHITECTURE.html — Deployment target</a>.</li>
-  <li>[ ] <strong>Open questions</strong> in <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> reviewed by stakeholders (streaming, model-emitted identifiers, multipart content, etc.).</li>
+  <li>[ ] <strong>Open questions</strong> in <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> reviewed by stakeholders (token-map shape as a contract, per-call config, confidence thresholds).</li>
 </ul>
 
 <p><strong>Exit:</strong> Language ADR decided, quality targets signed off, deployment target chosen, remaining open questions either resolved or explicitly deferred to a named milestone.</p>
@@ -33,88 +34,80 @@
 
 <blockquote>Specific tooling (test framework, module layout) finalized after the language decision in M0.</blockquote>
 
-<p>Goal: a standalone redactor that takes text + a token map, returns redacted text and a mutated map. No HTTP, no proxy.</p>
+<p>Goal: a standalone redactor that takes text + an existing token map, returns redacted text and an updated map. No HTTP, no service yet.</p>
 <ul>
-  <li>Presidio analyzer + custom anonymization that emits <code>[TYPE_N]</code> tokens.</li>
-  <li>Stable token assignment: same original string in the same request → same token.</li>
+  <li>Presidio analyzer + anonymization that emits <code>[TYPE_N]</code> tokens.</li>
+  <li>Caller-supplied map merge: existing originals reuse their tokens; new originals mint new tokens against the supplied map.</li>
   <li>Unit tests covering:
     <ul>
-      <li>Names, phone numbers, emails, dates, addresses, MRN-shaped IDs.</li>
-      <li>Repeated identifiers get the same token.</li>
+      <li>Names, phone numbers, emails, dates, addresses, MRN-shaped IDs, financial PANs.</li>
+      <li>Repeated identifiers across multiple calls (with the map passed back in) get the same token.</li>
       <li>Empty / all-PII / no-PII inputs.</li>
-      <li>Token format doesn't collide with text that already contains brackets.</li>
+      <li>Inputs that contain token-shaped substrings are rejected (threat T5).</li>
     </ul>
   </li>
 </ul>
-<p><strong>Exit:</strong> tests green; redactor round-trips a synthetic clinical prompt set with ≥ target recall (target TBD in M0).</p>
+<p><strong>Exit:</strong> tests green; redactor round-trips a synthetic multi-domain corpus with ≥ target recall (target TBD in M0).</p>
 
-<h2>M2 — Proxy MVP (non-streaming)</h2>
+<h2>M2 — Redaction service MVP</h2>
 
 <blockquote>HTTP framework picked after M0.</blockquote>
 
-<p>Goal: a runnable service that proxies <code>POST /v1/chat/completions</code> to a configured upstream, redacting on the way in and rehydrating on the way out.</p>
+<p>Goal: a runnable service exposing the API in <a href="ARCHITECTURE.html#api-surface">ARCHITECTURE.html — API surface</a>.</p>
 <ul>
-  <li><code>POST /v1/chat/completions</code> (non-streaming only — reject <code>stream: true</code> with 400).</li>
-  <li><code>GET /healthz</code>.</li>
-  <li>Upstream URL + auth header pass-through configured via env vars.</li>
-  <li>Integration test against a stub upstream that echoes its received messages back, verifying the upstream never sees raw PHI.</li>
+  <li><code>POST /redact</code> — accepts <code>{text, token_map?, language?}</code>; returns <code>{redacted_text, token_map}</code>.</li>
+  <li><code>POST /unredact</code> — accepts <code>{text, token_map}</code>; returns <code>{text}</code>.</li>
+  <li><code>GET /healthz</code> — returns ok once the analyzer model is loaded.</li>
+  <li>Request size cap configurable via env var (threat T9).</li>
+  <li>Integration test: a synthetic caller sends a multi-turn conversation through <code>/redact</code> + <code>/unredact</code>, asserting cross-turn token stability and round-trip fidelity.</li>
 </ul>
-<p><strong>Exit:</strong> <code>curl</code> against the proxy with a PHI-laden prompt returns a rehydrated response; tcpdump / logs on the upstream stub show only tokens.</p>
+<p><strong>Exit:</strong> <code>curl</code> against the service round-trips text through <code>/redact</code> and <code>/unredact</code> with stable tokens across calls; structured logs contain no raw identifiers.</p>
 
-<h2>M3 — Streaming support</h2>
+<h2>M3 — Performance: hybrid regex + NER</h2>
 
-<p>Goal: handle <code>stream: true</code> SSE responses with safe token rehydration.</p>
+<p>Only do this if M2 profiling shows the NER pass dominates p95 latency.</p>
 <ul>
-  <li>Buffered rehydrator: hold back any trailing <code>[</code> until it can prove the partial isn't one of our tokens, then flush.</li>
-  <li>Backpressure / cancellation handled.</li>
-  <li>Test fixtures that split known tokens across chunk boundaries at every position.</li>
-</ul>
-<p><strong>Exit:</strong> A streaming client sees rehydrated names appear in the stream, with no token leakage and no measurable latency penalty on chunks that contain no tokens.</p>
-
-<h2>M4 — Performance: hybrid regex + NER</h2>
-
-<p>Only do this if M2/M3 profiling shows the NER pass dominates request latency.</p>
-<ul>
-  <li>Pre-filter messages with a fast regex pass for structured identifiers.</li>
-  <li>Only invoke the spaCy pipeline on messages that still contain free-text spans.</li>
+  <li>Pre-filter input with a fast regex pass for structured identifiers (SSN, PAN, phone, email).</li>
+  <li>Only invoke the spaCy pipeline on spans that aren't fully covered by regex.</li>
   <li>Bench harness comparing pre- and post-optimization on a fixed corpus.</li>
 </ul>
-<p><strong>Exit:</strong> Documented p50/p95 redaction latency improvement on the bench corpus.</p>
+<p><strong>Exit:</strong> documented p50/p95 latency improvement on the bench corpus; quality metrics unchanged.</p>
 
-<h2>M5 — Deployment</h2>
+<h2>M4 — Deployment</h2>
 
 <ul>
   <li>Dockerfile (multi-stage, slim runtime).</li>
-  <li><code>docker-compose.yml</code> for local dev: proxy + a self-hosted LLM (e.g. vLLM or Ollama).</li>
+  <li><code>docker-compose.yml</code> for local dev: the service plus a tiny demo caller that exercises <code>/redact</code> and <code>/unredact</code>.</li>
   <li>Readiness probe that waits for the spaCy model to load.</li>
+  <li>Documentation on caller integration: when to call <code>/redact</code>, how to store the token map, the trust boundary established by <a href="ARCHITECTURE.html#threat-model">threat T4</a>.</li>
 </ul>
-<p><strong>Exit:</strong> <code>docker compose up</code> brings up the stack; the smoke test from M2 passes against the composed stack.</p>
+<p><strong>Exit:</strong> <code>docker compose up</code> brings up the stack; the M2 integration test passes against the composed stack.</p>
 
 <h2>Open questions</h2>
 
 <p>These block specific milestones rather than the plan as a whole:</p>
 <ul>
-  <li><strong>Implementation language</strong> (blocks M1 and everything after) — see <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #0.</li>
-  <li><strong>Streaming approach</strong> (blocks M3) — see <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #1.</li>
-  <li><strong>Model-emitted identifiers</strong> (blocks shipping to real clinical users) — see <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #2.</li>
-  <li><strong>Confidence thresholds and recall target</strong> (blocks M1 exit) — see <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #4.</li>
+  <li><strong>Implementation language</strong> (blocks M1 and everything after) — see <a href="decisions/0001-language-and-topology.html">ADR 0001</a>.</li>
+  <li><strong>Confidence thresholds and recall target</strong> (blocks M1 exit) — see <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #1.</li>
+  <li><strong>Token-map shape as a long-lived contract</strong> (blocks M2 — caller integration depends on it) — see <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #2.</li>
 </ul>
 
 <h2>Deferred / out of scope</h2>
 <ul>
+  <li>Transparent OpenAI-compatible proxy mode. See <a href="decisions/0002-service-shape.html">ADR 0002</a> for why.</li>
   <li>Multi-tenant auth, rate limiting, audit logging — handled by surrounding infra.</li>
-  <li>Multipart <code>content</code> arrays in chat completions (images, file refs).</li>
-  <li>A <code>/v1/embeddings</code> or <code>/v1/completions</code> surface — add when a real client needs it.</li>
-  <li>Cross-request session state / a session-keyed token store — only if a use case appears that the per-request map can't satisfy.</li>
+  <li>Streaming responses, multipart content. Not in scope after the service-shape pivot.</li>
+  <li>Server-held sessions or token-store. Maps are caller-owned per <a href="decisions/0002-service-shape.html">ADR 0002</a>.</li>
 </ul>
 
 <h2>Decision log</h2>
 <ul>
-  <li><strong>2026-05-30</strong> — Locked on-prem-only hosting, Presidio engine, OpenAI-compatible API, reversible per-request token map.</li>
+  <li><strong>2026-05-30</strong> — Locked on-prem-only hosting, Presidio engine, reversible token map. (Originally also locked OpenAI-compatible chat completions as the public API; <em>superseded</em> by ADR 0002.)</li>
   <li><strong>2026-05-30</strong> — Vendored Karpathy guidelines under <code>skills/karpathy-guidelines/</code> rather than relying on plugin install, to keep the repo self-contained. Plugin install remains a supported alternative; see <code>README.md</code>.</li>
   <li><strong>2026-05-30</strong> — Created GitHub remote <code>rick-johnn/prompt-redact</code> (private). Visibility can be flipped to public later if/when this is ever open-sourced.</li>
-  <li><strong>2026-05-30</strong> — Opened ADR <a href="decisions/0001-language-and-topology.html">decisions/0001-language-and-topology.html</a> (status: Proposed) instead of silently picking Python. Decision deferred until missing inputs (team familiarity, throughput target, deployment conventions, future scope) are answered.</li>
-  <li><strong>2026-05-30</strong> — <strong>Documentation format convention:</strong> docs under <code>docs/</code> are authored in HTML, not markdown. Markdown is reserved for <code>README.md</code>, <code>CLAUDE.md</code>, and <code>skills/*/SKILL.md</code>. Existing markdown docs converted in the same change.</li>
+  <li><strong>2026-05-30</strong> — Opened <a href="decisions/0001-language-and-topology.html">ADR 0001</a> (Implementation language and topology, status: Proposed) instead of silently picking Python. Decision deferred until missing inputs are answered.</li>
+  <li><strong>2026-05-30</strong> — <strong>Documentation format convention:</strong> docs under <code>docs/</code> are authored in HTML, not markdown. Markdown is reserved for <code>README.md</code>, <code>CLAUDE.md</code>, and <code>skills/*/SKILL.md</code>.</li>
+  <li><strong>2026-05-30</strong> — <a href="decisions/0002-service-shape.html">ADR 0002</a> (Accepted): pivoted from a transparent OpenAI-compatible proxy to a standalone redaction microservice (<code>/redact</code> + <code>/unredact</code>). Caller — not the service — owns the token map and orchestrates downstream calls (including any LLM call). The service is stateless and never touches LLM backends.</li>
 </ul>
 
 </body>
