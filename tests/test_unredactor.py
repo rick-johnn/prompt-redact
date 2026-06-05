@@ -48,6 +48,26 @@ def test_original_containing_token_shape_is_not_resubstituted():
     assert unredact(text, m) == "agent [X_1] smith arrived"
 
 
+def test_token_valued_original_is_not_recursively_resolved():
+    # The dangerous case the test above does NOT prove: the inserted value is
+    # itself a *known* token. A recursive implementation would silently leak
+    # "SHOULD_NOT_APPEAR"; the single-pass guarantee must yield "[PERSON_2]"
+    # verbatim. This is a wrong-result (leak) failure mode, not a raised error.
+    m = {"[PERSON_1]": "[PERSON_2]", "[PERSON_2]": "SHOULD_NOT_APPEAR"}
+    assert unredact("[PERSON_1]", m) == "[PERSON_2]"
+
+
+def test_adjacent_tokens():
+    m = {"[A_1]": "X", "[B_1]": "Y"}
+    assert unredact("[A_1][B_1]", m) == "XY"
+
+
+def test_tokens_at_text_boundaries():
+    m = {"[PERSON_1]": "John", "[PERSON_2]": "Jane"}
+    # Token at the very start and the very end of the string.
+    assert unredact("[PERSON_1] and [PERSON_2]", m) == "John and Jane"
+
+
 # --- unknown token (strict, all-or-nothing) ---------------------------------
 
 def test_unknown_token_raises():
@@ -118,4 +138,15 @@ def test_round_trip_no_pii_is_identity():
     text = "No identifiers in this sentence."
     redacted, m = _redact(text, [])
     assert redacted == text
+    assert unredact(redacted, m) == text
+
+
+def test_round_trip_multiline():
+    text = "Name: John Doe\nMRN: 12345\n"
+    dets = [
+        Detection(6, 14, "PERSON", "John Doe"),
+        Detection(20, 25, "MRN", "12345"),
+    ]
+    redacted, m = _redact(text, dets)
+    assert redacted == "Name: [PERSON_1]\nMRN: [MRN_1]\n"
     assert unredact(redacted, m) == text

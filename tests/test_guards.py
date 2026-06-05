@@ -71,3 +71,25 @@ def test_error_collects_all_matches():
         assert_no_token_shapes(text)
     tokens = [m.token for m in exc.value.matches]
     assert tokens == ["[PERSON_1]", "[PERSON_2]", "[DATE_TIME_1]"]
+
+
+# --- more behavioural edges -------------------------------------------------
+
+def test_token_on_a_later_line_is_detected():
+    # The scan is whole-text, not first-line; newlines don't hide a token.
+    with pytest.raises(TokenShapedInputError):
+        assert_no_token_shapes("a clean line\nthen a [PERSON_1] appears\nmore")
+
+
+@pytest.mark.parametrize("boundary_text", ["[PERSON_1] tail", "head [PERSON_1]"])
+def test_token_at_text_boundaries_rejected(boundary_text):
+    with pytest.raises(TokenShapedInputError):
+        assert_no_token_shapes(boundary_text)
+
+
+@pytest.mark.parametrize("text", ["[A1B_2]", "[123_4]", "[1_2]"])
+def test_digit_bearing_types_are_not_token_shaped(text):
+    # Types must start with A-Z and contain no digits, so these can never be
+    # confused with a minted token -> accepted.
+    assert contains_token_shapes(text) is False
+    assert assert_no_token_shapes(text) is None
