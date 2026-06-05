@@ -67,6 +67,12 @@
 </ul>
 <p>Later specs extend this module (e.g. the T5 <code>TokenShapedInputError</code>, the unredact <code>TokenCollisionError</code>).</p>
 
+<h2>Resolved behaviour decisions</h2>
+<ul>
+  <li><strong>Same literal under two entity types &rarr; key by literal only.</strong> If one string is detected under two types in a single pass (e.g. <code>"12345"</code> as both <code>MRN</code> and <code>US_BANK_NUMBER</code>), both reuse the token minted for the first occurrence by offset. The value is identical so this always round-trips; the token's type label is just whichever type saw the literal first. (Decision 2026-06-05.)</li>
+  <li><strong>Empty-text detections are skipped.</strong> A detection with <code>text == ""</code> carries no value; it is dropped before assignment and never enters the map. A well-behaved analyzer does not emit them. (Decision 2026-06-05.)</li>
+</ul>
+
 <h2>Out of scope for this spec</h2>
 <ul>
   <li>Detecting PII (that's the analyzer, Spec M1-04) — <code>assign_tokens</code> takes already-detected spans.</li>

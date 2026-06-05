@@ -95,6 +95,14 @@ def test_find_tokens_empty_when_none():
     assert find_tokens("no tokens here") == []
 
 
+def test_find_tokens_adjacent():
+    text = "[A_1][B_2]"
+    matches = find_tokens(text)
+    assert [(m.entity_type, m.n) for m in matches] == [("A", 1), ("B", 2)]
+    assert (matches[0].start, matches[0].end) == (0, 5)
+    assert (matches[1].start, matches[1].end) == (5, 10)
+
+
 # --- apply_replacements -----------------------------------------------------
 
 def test_apply_replacements_single():
@@ -131,6 +139,19 @@ def test_apply_replacements_adjacent_spans_ok():
 def test_apply_replacements_rejects_overlap():
     with pytest.raises(OverlappingSpansError):
         apply_replacements("abcd", [Replacement(0, 3, "[X_1]"), Replacement(2, 4, "[Y_1]")])
+
+
+def test_apply_replacements_rejects_duplicate_identical_span():
+    # The same span listed twice is an overlap, not a silent no-op.
+    with pytest.raises(OverlappingSpansError):
+        apply_replacements("abcd", [Replacement(0, 2, "[X_1]"), Replacement(0, 2, "[X_1]")])
+
+
+def test_apply_replacements_unicode_offsets():
+    # Offsets are code-point based; multi-byte chars must not shift the splice.
+    text = "café résumé"  # 'é' is one code point; the space at index 4 is kept
+    out = apply_replacements(text, [Replacement(0, 4, "[WORD_1]"), Replacement(5, 11, "[WORD_2]")])
+    assert out == "[WORD_1] [WORD_2]"
 
 
 @pytest.mark.parametrize(

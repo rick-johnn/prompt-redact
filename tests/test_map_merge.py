@@ -86,3 +86,27 @@ def test_rejects_ambiguous_original():
     bad = {"[PERSON_1]": "John", "[PERSON_2]": "John"}  # one original, two tokens
     with pytest.raises(MalformedTokenMapError):
         assign_tokens([], bad)
+
+
+# --- resolved behaviour decisions (Spec M1-01) ------------------------------
+
+def test_same_literal_across_types_keys_by_literal_only():
+    # "12345" seen first as MRN, later as US_BANK_NUMBER -> both reuse [MRN_1].
+    dets = [_det(0, 5, "MRN", "12345"), _det(20, 25, "US_BANK_NUMBER", "12345")]
+    reps, new_map = assign_tokens(dets, {})
+    assert [r.token for r in reps] == ["[MRN_1]", "[MRN_1]"]
+    assert new_map == {"[MRN_1]": "12345"}
+
+
+def test_empty_text_detection_is_skipped():
+    dets = [_det(5, 5, "PERSON", ""), _det(10, 14, "PERSON", "John")]
+    reps, new_map = assign_tokens(dets, {})
+    # The empty detection produces no replacement and no map entry.
+    assert [r.token for r in reps] == ["[PERSON_1]"]
+    assert new_map == {"[PERSON_1]": "John"}
+
+
+def test_all_empty_detections_yield_empty_result():
+    reps, new_map = assign_tokens([_det(0, 0, "PERSON", "")], {})
+    assert reps == []
+    assert new_map == {}

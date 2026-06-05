@@ -123,10 +123,17 @@ def assign_tokens(
 
     * Same original value reuses its existing token, within a call and across
       calls when ``new_map`` is passed back in.
+    * Reuse is keyed on the **literal original text only**, not on entity type:
+      if the same string is detected under two types in one pass, both reuse
+      the token minted for the first occurrence (by offset). The value is
+      identical, so this always round-trips; the token's type label is simply
+      whichever type saw the literal first.
     * New originals mint ``max_existing_N + 1`` for their type, so numbering
       continues from the supplied map and per-type counters are independent.
     * Minting order follows detection ``(start, end)`` offsets, so the result
       is independent of the order detections are passed in.
+    * Empty-text detections (``text == ""``) are skipped: they carry no value
+      and a well-behaved analyzer does not emit them.
 
     Raises ``MalformedTokenMapError`` if a map key is not a valid token or a
     single original is reachable from two different tokens.
@@ -154,6 +161,8 @@ def assign_tokens(
     replacements: list[Replacement] = []
 
     for det in sorted(detections, key=lambda d: (d.start, d.end)):
+        if det.text == "":
+            continue  # nothing to redact; keep empties out of the map
         token = reverse.get(det.text)
         if token is None:
             n = max_n.get(det.entity_type, 0) + 1
