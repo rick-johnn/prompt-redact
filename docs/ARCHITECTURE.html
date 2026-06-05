@@ -12,7 +12,11 @@
 
 <h2>Problem</h2>
 
-<p>Applications in regulated industries — healthcare chat, financial assistants, legal copilots, pharma research tools, GDPR-scoped products — routinely handle text that contains identifiers which must not leak to a third-party LLM. The same applications also need to log, index, archive, and evaluate that text without accumulating identifiers in those downstream systems. We need a single place to do the redaction step, callable on its own, fast enough that the calling app can invoke it on the hot path of a user interaction.</p>
+<p>Applications in regulated industries — healthcare chat, financial assistants, legal copilots, pharma research tools, GDPR-scoped products — routinely handle text that contains identifiers which must not spread to systems not cleared to hold them. A third-party LLM is the obvious case, but it is rarely the only one — and often not the most important one.</p>
+
+<p>Many larger organizations already hold a legal agreement (in healthcare, a <strong>Business Associate Agreement</strong>) that permits sending protected data to <em>one specific, approved</em> LLM. For them the approved model call may already be covered — yet the same text keeps flowing into systems that are <em>not</em>: LLM observability and prompt-logging tools (frequently third-party SaaS), analytics pipelines and data warehouses, evaluation and QA harnesses where engineers inspect real traffic, and any cheaper or specialized model that is not on the approved list. Each is a place identifiers accumulate where they should not.</p>
+
+<p>The leverage point is therefore a single redaction step, callable on its own: clean the text <em>once</em>, then use it safely across every downstream consumer — fast enough that the calling app can invoke it on the hot path of a user interaction.</p>
 
 <h2>Goals</h2>
 
@@ -55,17 +59,18 @@
    and decides what to do with redacted text. The service is stateless.
 </pre>
 
-<h2>Implementation stack — <strong>TBD</strong></h2>
+<h2>Implementation stack</h2>
 
 <table>
   <thead>
     <tr><th>Decision</th><th>Status</th></tr>
   </thead>
   <tbody>
-    <tr><td>Implementation language</td><td><strong>TBD</strong> — see <a href="decisions/0001-language-and-topology.html">ADR 0001</a></td></tr>
-    <tr><td>HTTP framework</td><td>TBD (follows from language)</td></tr>
-    <tr><td>Redaction engine</td><td>Presidio <em>(locked)</em> — Python-only; constrains language choice to Python or a sidecar split</td></tr>
-    <tr><td>Test framework</td><td>TBD (follows from language)</td></tr>
+    <tr><td>Topology</td><td><strong>Sidecar</strong> <em>(decided)</em> — fast front-end + Python Presidio sidecar over loopback IPC. See <a href="decisions/0001-language-and-topology.html">ADR 0001</a>.</td></tr>
+    <tr><td>Front-end language</td><td><strong>Go or TypeScript</strong> — final pick at M1 start</td></tr>
+    <tr><td>HTTP framework</td><td>TBD (follows from front-end pick)</td></tr>
+    <tr><td>Redaction engine</td><td>Presidio <em>(locked)</em> — runs in a Python sidecar</td></tr>
+    <tr><td>Test framework</td><td>TBD (follows from front-end pick)</td></tr>
   </tbody>
 </table>
 
@@ -130,6 +135,38 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
                                             text = substitute(text, token, original)
                               ◀── 200 { text }
 </pre>
+
+<h2 id="token-map-handling">Token-map handling (FAQ)</h2>
+
+<p>The token map is <code>{ token: original }</code> — e.g. <code>{ "[PERSON_1]": "John Doe", "[US_DRIVER_LICENSE_1]": "12345" }</code>. It is the most sensitive object in the system: it <em>contains the raw identifiers</em>. These are the questions adopters ask most about how it is stored and protected. The short version: <strong>the service stores nothing; the caller owns the map.</strong> This follows directly from the stateless decision in <a href="decisions/0002-service-shape.html">ADR 0002</a>.</p>
+
+<h3>Where does the token map live? Who stores it?</h3>
+<p>The <strong>calling application</strong> owns and stores it. The map travels in the JSON request/response body, is returned (updated) by <code>/redact</code>, and the caller holds it for the lifetime of the conversation, passing it back on subsequent calls for cross-turn consistency. The service is a pure function per call — it receives the map, uses it, returns it, and retains nothing.</p>
+
+<h3>Does the service have a database? Do I provide a connection string?</h3>
+<p><strong>No, and no.</strong> The service has no datastore, no cache, no session store, and no per-caller state. There is no connection string to configure because there is nothing to connect to. If the calling application chooses to <em>persist</em> the map (see below), that is the application's own datastore and the application's own connection string — never the service's.</p>
+
+<h3>What storage should the caller use for the map?</h3>
+<p>Whatever the application already uses for sensitive data, scoped to the lifetime of a conversation:</p>
+<ul>
+  <li><strong>In-memory</strong> — fine if the whole conversation is handled within one process/request lifetime.</li>
+  <li><strong>A session store / cache</strong> (e.g. Redis) — typical for multi-turn chat; apply encryption at rest and a TTL tied to conversation lifetime.</li>
+  <li><strong>A database</strong> (e.g. Postgres) — when conversations must survive restarts; encrypt the column/field at the same trust level as the raw input.</li>
+</ul>
+<p>The map should be discarded when the conversation ends; a per-session map also limits the blast radius of the token-cardinality side-channel (threat <a href="#threat-model">T10</a>).</p>
+
+<h3>Who encrypts it, and where?</h3>
+<ul>
+  <li><strong>At rest:</strong> the caller's responsibility. The map is exactly as sensitive as the raw input and must be protected at the same trust level. This is threat <a href="#threat-model">T6</a> — a documented caller responsibility the service cannot enforce.</li>
+  <li><strong>In transit:</strong> the map crosses the wire between the application and the service, so transport encryption protects it — TLS, or mTLS for the <a href="#deployment-target">standalone topology</a>. In the <strong>sidecar / loopback</strong> deployment the map never leaves the host.</li>
+  <li><strong>Inside the service:</strong> the map exists only in memory for the duration of a single request and is never written anywhere.</li>
+</ul>
+
+<h3>Why isn't storing and encrypting the map the service's job?</h3>
+<p>Keeping the service stateless buys trivial horizontal scaling (any replica can serve any call), no session-eviction policy, and no shared datastore to breach or threat-model. <a href="decisions/0002-service-shape.html">ADR 0002</a> explicitly considered and rejected server-held sessions for these reasons. The cost of that choice is that the storage-and-encryption burden moves to the caller — an honest, documented trade.</p>
+
+<h3>Could the service offer an optional &ldquo;hold and encrypt the map for me&rdquo; mode?</h3>
+<p>Not in v1. Such a mode would reintroduce server-side state, a datastore, key management, and several threat-model rows that <a href="decisions/0002-service-shape.html">ADR 0002</a> deliberately removed. It is a legitimate idea, but it reopens that decision and would require a new ADR weighing it — it will not be added silently.</p>
 
 <h2>Token format</h2>
 
@@ -220,11 +257,12 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
     <tr><td>T3</td><td>Identifiers leak via panic/crash dumps or debug traces</td><td>Crash handlers must scrub message bodies before emitting; debug/verbose log levels are off in production by default</td><td>Open — needs implementation pattern</td></tr>
     <tr><td>T4</td><td><strong>Chat app forgets (or refuses) to call <code>/redact</code> and sends raw text directly to an LLM.</strong> Under the redaction-service model the service is not in the traffic path; it cannot enforce its own use.</td><td>Cannot mitigate inside the service. Lives outside: code review of all integration paths between chat app and any LLM client; integration tests that assert no path from user input to LLM call skips <code>/redact</code>; optional separate enforcement at the LLM ingress (e.g. a network policy or egress filter that blocks outbound traffic containing recognizable PII patterns).</td><td>Core — documented boundary, not solved by code in this service</td></tr>
     <tr><td>T5</td><td>Token collision — an input already contains a substring that looks like one of our tokens</td><td>Pre-scan input for the <code>[A-Z_]+_\d+]</code> pattern; <code>400</code> on hit, with a message explaining the constraint. Document the format so callers can avoid it.</td><td>Open — implementation detail for M1</td></tr>
-    <tr><td>T6</td><td>Caller mishandles the returned token map — logs it, persists it without encryption, ships it to another service</td><td>The token map is sensitive (it's literally <code>{token: original}</code>). Document its sensitivity prominently in the API docs. Callers should treat the map as the same trust level as the raw input.</td><td>Open — documentation responsibility; consider returning a warning header</td></tr>
+    <tr><td>T6</td><td>Caller mishandles the returned token map — logs it, persists it without encryption, ships it to another service</td><td>The token map is sensitive (it's literally <code>{token: original}</code>). Document its sensitivity prominently in the API docs — see <a href="#token-map-handling">Token-map handling</a>. Callers should treat the map as the same trust level as the raw input.</td><td>Open — documentation responsibility; consider returning a warning header</td></tr>
     <tr><td>T7</td><td>Insider with shell access to the service host can capture raw identifiers in-flight</td><td>Out of scope for the service itself; mitigated by host-level access controls, audit logging, least-privilege deploys. Documented boundary.</td><td>Boundary — documented, not solved by code</td></tr>
     <tr><td>T8</td><td>Supply-chain compromise of the spaCy model or a Presidio dependency</td><td>Pin exact versions and hashes; reproducible build; internal mirror of the model artifact</td><td>Open — pin policy, mirror decision</td></tr>
     <tr><td>T9</td><td>DoS via oversized request bodies that explode the NER pass</td><td>Cap request body size; reject above threshold with <code>413</code>; surface metrics on input size distribution</td><td>Open — pick thresholds</td></tr>
     <tr><td>T10</td><td>Token cardinality side-channel — a downstream LLM seeing <code>[PERSON_1]</code> … <code>[PERSON_5]</code> can infer how many distinct people the caller's conversation references</td><td>Accept and document; mitigation (e.g. randomized token IDs) costs LLM reasoning quality. The caller can mitigate further by rotating maps per session.</td><td>Accepted</td></tr>
+    <tr><td>T11</td><td>Sensitive text intercepted on the front-end &harr; Python-sidecar IPC channel introduced by the sidecar topology (<a href="decisions/0001-language-and-topology.html">ADR 0001</a>)</td><td>IPC is loopback-only on a single host — never on the network; require mutual TLS if the two halves are ever split across hosts. Keep the sidecar bound to localhost.</td><td>Open — implementation detail for M1</td></tr>
   </tbody>
 </table>
 
@@ -242,7 +280,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
   <li><strong>End-to-end leakage rate</strong> — over a labelled corpus, the fraction of inputs where <em>any</em> entity span escaped redaction. This is what a compliance review will care about.</li>
 </ul>
 
-<h3>Targets (proposed, to be confirmed)</h3>
+<h3>Targets (confirmed — 2026-06-05)</h3>
 <table>
   <thead>
     <tr><th>Metric</th><th>Target</th></tr>
@@ -254,7 +292,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
     <tr><td>p95 <code>/redact</code> latency for a 500-token message</td><td><strong>≤ 50 ms</strong> on the target deployment hardware</td></tr>
   </tbody>
 </table>
-<p>These numbers are starting points — they need stakeholder sign-off (especially the leakage rate) before M1 can exit. The latency number is sharper now than under the prior proxy design: it's the whole user-perceived call, not added cost on top of an LLM round-trip.</p>
+<p>Compliance signed off on these as <strong>the bar</strong> on 2026-06-05. They are now the M1 acceptance gate: M1 measures whether the redactor actually meets them against the eval corpus. The latency number is sharper now than under the prior proxy design: it's the whole user-perceived call, not added cost on top of an LLM round-trip.</p>
 
 <h3>Evaluation corpus</h3>
 <p>We need a labelled dataset to measure against. Options, in order of effort:</p>
@@ -263,7 +301,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
   <li><strong>Public PII/PHI benchmark sets</strong> (e.g. i2b2/n2c2 de-identification challenges) under their data-use agreements. Higher signal; data-use review required.</li>
   <li><strong>Held-out internal real corpus</strong>, sampled from production with proper PII-handling controls. Highest signal; requires a separate data-handling protocol.</li>
 </ol>
-<p>Building (1) is a deliverable of its own. Treat the synthetic corpus and its labelling rubric as a separate artifact under <code>evals/</code> (path TBD pending language decision).</p>
+<p>Building (1) is a deliverable of its own, and an M1 prerequisite — the quality bar can't be measured without it. Treat the synthetic corpus and its labelling rubric as a separate artifact under <code>evals/</code>.</p>
 
 <h3>Methodology notes</h3>
 <ul>
@@ -274,7 +312,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
 
 <h2 id="deployment-target">Deployment target</h2>
 
-<p>This section is a sketch — the final choice is open question #5 below and needs stakeholder input on existing infrastructure.</p>
+<p><strong>Decision (2026-06-05):</strong> the primary v1 target is the <strong>standalone k8s service</strong> below — a shared deployment multiple callers hit — with a docker-compose setup for local dev (per M4). The other topologies remain documented as supported/alternative shapes an adopter may choose.</p>
 
 <h3>Candidate topologies</h3>
 <table>
@@ -283,7 +321,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
   </thead>
   <tbody>
     <tr><td><strong>k8s sidecar</strong> to the caller</td><td>One <code>prompt-redact</code> container alongside the chat (or other) service in the same pod; caller talks to it over localhost</td><td>Per-pod scaling, no network hop, no service-mesh policy needed for the call. Bigger pod image. Easy answer for a single dominant caller.</td></tr>
-    <tr><td><strong>Standalone k8s service</strong></td><td><code>prompt-redact</code> deployment fronted by a ClusterIP service; multiple callers share it</td><td>Best when more than one caller needs redaction (chat + batch + indexer). Adds a network hop; needs mesh-level mTLS / network policy to keep input cleartext off the wire.</td></tr>
+    <tr><td><strong>Standalone k8s service</strong> <em>(v1 target)</em></td><td><code>prompt-redact</code> deployment fronted by a ClusterIP service; multiple callers share it</td><td>Best when more than one caller needs redaction (chat + batch + indexer). Adds a network hop; needs mesh-level mTLS / network policy to keep input cleartext off the wire.</td></tr>
     <tr><td><strong>VM / bare host</strong></td><td>One or more VMs running the service directly</td><td>Simplest if there's no orchestrator. Manual scaling, manual rolling deploys.</td></tr>
     <tr><td><strong>On-device / edge</strong></td><td>Runs at the caller's edge (e.g. a clinical workstation, a laptop)</td><td>Best latency, hardest deploy and update story; model size is a real constraint at the edge.</td></tr>
   </tbody>
@@ -296,8 +334,8 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
   <li>Container image size is dominated by the spaCy/transformer model. Expect hundreds of MB. Worth a registry mirror inside the trust boundary.</li>
 </ul>
 
-<h3>Open question for stakeholders</h3>
-<p>What's the surrounding infrastructure? k8s? VMs? Edge? The answer drives the M5 deliverables and the supply-chain row (T8) in the threat model.</p>
+<h3>Resolved</h3>
+<p>Primary v1 target: <strong>standalone k8s service</strong> (multiple callers share one deployment) + docker-compose for local dev. This drives the M4 deliverables and the supply-chain row (T8) in the threat model. Sidecar / VM / edge remain documented alternatives an adopter may choose.</p>
 
 <h2>Alternatives considered</h2>
 <ul>
@@ -307,15 +345,16 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
   <li><strong>Browser-side NER (e.g. <code>compromise.cool</code>).</strong> Reduces network exposure but the client becomes a trust boundary — a tampered client can ship raw input. We keep the redactor as a server-side authoritative call; browser-side scrubbing could be added later as defense-in-depth.</li>
 </ul>
 
-<h2>Open questions</h2>
+<h2 id="open-questions">Open questions</h2>
+<p><em>All M0 open questions are resolved or explicitly deferred to a named milestone as of 2026-06-05.</em></p>
 <ol start="0">
-  <li><strong>Implementation language.</strong> See <a href="decisions/0001-language-and-topology.html">ADR 0001</a>. Blocks every code-level decision.</li>
-  <li><strong>Confidence thresholds.</strong> Presidio returns scores; the cutoff trades recall (more aggressive redaction) for precision (less spurious masking). Needs the eval corpus.</li>
-  <li><strong>Token-map shape as a long-lived contract.</strong> Because callers persist the map across calls, its format is a contract we have to honor (or version). Decide: stable JSON shape now? Versioned envelope? Allow extension fields?</li>
-  <li><strong>Should <code>/redact</code> accept per-call configuration?</strong> e.g. an entity-type allow-list, additional regexes, language hint per call. Useful for multi-domain deployments (the chat app knows it's in &ldquo;finance mode&rdquo;) but expands the surface.</li>
-  <li><strong>What to do when redaction would empty the input.</strong> A request whose <code>text</code> is <em>only</em> a phone number becomes <code>"[PHONE_NUMBER_1]"</code> — fine. But edge cases (a system prompt that's pure identifiers) may degrade downstream LLM use. Probably accept and document.</li>
-  <li><strong>Deployment target.</strong> See <a href="#deployment-target">Deployment target</a> above.</li>
-  <li><strong>Recall/precision targets — confirmed numbers.</strong> The proposed numbers above need compliance sign-off before M1 can exit.</li>
+  <li><strong>Implementation language &amp; topology.</strong> <em>Resolved</em> in <a href="decisions/0001-language-and-topology.html">ADR 0001</a> (Accepted): sidecar — Go or TypeScript front-end + Python Presidio sidecar. Remaining: final front-end pick (Go vs TypeScript) at M1 start.</li>
+  <li><strong>Confidence thresholds.</strong> <em>Resolved</em> — start at Presidio defaults and tune against the eval corpus during M1 (the recall target &ge; 0.99 is fixed; the threshold is the dial). Presidio returns scores; the cutoff trades recall for precision.</li>
+  <li><strong>Token-map shape as a long-lived contract.</strong> <em>Deferred to M2</em> — the wire contract hard-binds when the HTTP service ships, so the shape (flat JSON vs versioned envelope vs extension fields) is decided then. Because callers persist the map across calls, its format is a contract we must honor (or version).</li>
+  <li><strong>Should <code>/redact</code> accept per-call configuration?</strong> <em>Resolved</em> — v1 accepts the <code>language</code> hint only; entity allow-lists and custom regexes are out of scope for v1 to keep the surface minimal. Revisit if multi-domain demand appears.</li>
+  <li><strong>What to do when redaction would empty the input.</strong> <em>Resolved</em> — accept and document. A request whose <code>text</code> is <em>only</em> a phone number becomes <code>"[PHONE_NUMBER_1]"</code>; that's expected behavior, not an error.</li>
+  <li><strong>Deployment target.</strong> <em>Resolved</em> — standalone k8s service for v1. See <a href="#deployment-target">Deployment target</a> above.</li>
+  <li><strong>Recall/precision targets — confirmed numbers.</strong> <em>Resolved</em> — compliance signed off 2026-06-05 on leakage &le; 1/10,000, recall &ge; 0.99, precision &ge; 0.90, p95 &le; 50 ms as the bar. See <a href="#redaction-quality-targets">Redaction quality targets</a>.</li>
 </ol>
 
 <p><em>Dropped from the prior open-questions list after <a href="decisions/0002-service-shape.html">ADR 0002</a>:</em> streaming SSE rehydration (we don't see LLM responses), model-emitted identifiers (same reason), multipart message content (<code>/redact</code> takes plain text).</p>

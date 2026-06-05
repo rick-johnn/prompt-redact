@@ -10,7 +10,7 @@
 
 <p>Milestone-based. Each milestone has an exit criterion — a concrete observable that says &ldquo;this is done.&rdquo;</p>
 
-<h2>M0 — Design freeze <em>(current)</em></h2>
+<h2>M0 — Design freeze <em>(complete — 2026-06-05)</em></h2>
 
 <ul>
   <li>[x] Architectural decisions recorded in <a href="ARCHITECTURE.html">ARCHITECTURE.html</a>: on-prem, Presidio, reversible token map, caller-owned map.</li>
@@ -22,15 +22,15 @@
   <li>[x] Deployment-target sketch added with candidate topologies (sidecar / standalone / VM / edge).</li>
   <li>[x] Documentation format convention adopted: <code>docs/</code> is HTML; markdown reserved for <code>README.md</code>, <code>CLAUDE.md</code>, <code>skills/*/SKILL.md</code>.</li>
   <li>[x] <strong>Service shape pivot</strong> recorded in <a href="decisions/0002-service-shape.html">ADR 0002</a>: redaction-only microservice with <code>/redact</code> + <code>/unredact</code>; no LLM proxying.</li>
-  <li>[ ] <strong>Pick implementation language and topology.</strong> See <a href="decisions/0001-language-and-topology.html">ADR 0001</a>. Blocks every milestone below.</li>
-  <li>[ ] <strong>Confirm redaction quality targets.</strong> The leakage-rate number in particular needs compliance sign-off. See <a href="ARCHITECTURE.html#redaction-quality-targets">ARCHITECTURE.html — Redaction quality targets</a>.</li>
-  <li>[ ] <strong>Pick deployment target.</strong> Needs stakeholder input on existing infrastructure. See <a href="ARCHITECTURE.html#deployment-target">ARCHITECTURE.html — Deployment target</a>.</li>
-  <li>[ ] <strong>Open questions</strong> in <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> reviewed by stakeholders (token-map shape as a contract, per-call config, confidence thresholds).</li>
+  <li>[x] <strong>Pick implementation language and topology.</strong> Sidecar: fast front-end (Go or TypeScript) + Python Presidio sidecar; final front-end pick deferred to M1. See <a href="decisions/0001-language-and-topology.html">ADR 0001</a> (Accepted).</li>
+  <li>[x] <strong>Confirm redaction quality targets.</strong> Compliance signed off on the proposed numbers as the bar (leakage &le; 1/10,000, recall &ge; 0.99, precision &ge; 0.90, p95 &le; 50 ms). M1 measures actual performance against them. See <a href="ARCHITECTURE.html#redaction-quality-targets">ARCHITECTURE.html — Redaction quality targets</a>.</li>
+  <li>[x] <strong>Pick deployment target.</strong> Primary v1 target: <strong>standalone k8s service</strong> (shared by multiple callers) + docker-compose for local dev. See <a href="ARCHITECTURE.html#deployment-target">ARCHITECTURE.html — Deployment target</a>.</li>
+  <li>[x] <strong>Open questions</strong> reviewed: per-call config = <strong>language hint only</strong> for v1; confidence threshold = <strong>Presidio defaults, tuned in M1</strong>; empty-input = <strong>accept and document</strong>; token-map contract <strong>deferred to M2</strong> (named milestone). See <a href="ARCHITECTURE.html#open-questions">ARCHITECTURE.html — Open questions</a>.</li>
 </ul>
 
-<p><strong>Exit:</strong> Language ADR decided, quality targets signed off, deployment target chosen, remaining open questions either resolved or explicitly deferred to a named milestone.</p>
+<p><strong>Exit:</strong> Language ADR decided, quality targets signed off, deployment target chosen, remaining open questions either resolved or explicitly deferred to a named milestone. <strong>All met 2026-06-05 — M0 closed; M1 is now current.</strong></p>
 
-<h2>M1 — Redactor core</h2>
+<h2>M1 — Redactor core <em>(current)</em></h2>
 
 <blockquote>Specific tooling (test framework, module layout) finalized after the language decision in M0.</blockquote>
 
@@ -47,7 +47,7 @@
     </ul>
   </li>
 </ul>
-<p><strong>Exit:</strong> tests green; redactor round-trips a synthetic multi-domain corpus with ≥ target recall (target TBD in M0).</p>
+<p><strong>Exit:</strong> tests green; redactor round-trips a synthetic multi-domain corpus with per-entity recall ≥ 0.99 (the bar confirmed in M0).</p>
 
 <h2>M2 — Redaction service MVP</h2>
 
@@ -87,9 +87,9 @@
 
 <p>These block specific milestones rather than the plan as a whole:</p>
 <ul>
-  <li><strong>Implementation language</strong> (blocks M1 and everything after) — see <a href="decisions/0001-language-and-topology.html">ADR 0001</a>.</li>
-  <li><strong>Confidence thresholds and recall target</strong> (blocks M1 exit) — see <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #1.</li>
-  <li><strong>Token-map shape as a long-lived contract</strong> (blocks M2 — caller integration depends on it) — see <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #2.</li>
+  <li><strong>Final front-end language</strong> (Go vs TypeScript; blocks M1 start) — topology decided in <a href="decisions/0001-language-and-topology.html">ADR 0001</a> (sidecar + Python Presidio); the front-end pick is made at the start of M1.</li>
+  <li><strong>Confidence thresholds</strong> (blocks M1 exit) — recall target confirmed (&ge; 0.99); the threshold itself is tuned against the eval corpus during M1, starting from Presidio defaults. See <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #1.</li>
+  <li><strong>Token-map shape as a long-lived contract</strong> (deferred to M2 — the wire contract hard-binds when the service ships) — see <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> open question #2.</li>
 </ul>
 
 <h2>Deferred / out of scope</h2>
@@ -108,6 +108,8 @@
   <li><strong>2026-05-30</strong> — Opened <a href="decisions/0001-language-and-topology.html">ADR 0001</a> (Implementation language and topology, status: Proposed) instead of silently picking Python. Decision deferred until missing inputs are answered.</li>
   <li><strong>2026-05-30</strong> — <strong>Documentation format convention:</strong> docs under <code>docs/</code> are authored in HTML, not markdown. Markdown is reserved for <code>README.md</code>, <code>CLAUDE.md</code>, and <code>skills/*/SKILL.md</code>.</li>
   <li><strong>2026-05-30</strong> — <a href="decisions/0002-service-shape.html">ADR 0002</a> (Accepted): pivoted from a transparent OpenAI-compatible proxy to a standalone redaction microservice (<code>/redact</code> + <code>/unredact</code>). Caller — not the service — owns the token map and orchestrates downstream calls (including any LLM call). The service is stateless and never touches LLM backends.</li>
+  <li><strong>2026-06-05</strong> — <a href="decisions/0001-language-and-topology.html">ADR 0001</a> (Accepted): sidecar topology — a fast front-end (Go or TypeScript) calling a Python Presidio sidecar over a loopback-only IPC boundary. Final front-end language (Go vs TypeScript) deferred to M1. Supersedes the doc&rsquo;s earlier lean toward single full-Python.</li>
+  <li><strong>2026-06-05</strong> — <strong>M0 closed.</strong> Compliance signed off on the quality targets as the bar (leakage &le; 1/10,000, recall &ge; 0.99, precision &ge; 0.90, p95 &le; 50 ms). Primary v1 deployment target: standalone k8s service + docker-compose for local dev. Open questions resolved: per-call config = language hint only; confidence threshold = Presidio defaults tuned in M1; empty-input = accept and document; token-map contract deferred to M2.</li>
 </ul>
 
 </body>
