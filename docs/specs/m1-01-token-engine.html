@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-01: Token engine &amp; map merge</title>
+</head>
+<body>
+
+<h1>Spec M1-01 — Token engine &amp; map merge</h1>
+
+<p>First implementation spec for <a href="../plans/m1-redactor-core.html">M1</a>. Covers the pure-Python token vocabulary that everything else in the redactor builds on: the <code>[TYPE_N]</code> format, parsing, the caller-supplied map merge (token assignment), and right-to-left replacement. <strong>No Presidio/spaCy dependency</strong> — this module is fully unit-testable on its own, which is why it is sequenced first.</p>
+
+<p>Modules: <code>prompt_redact_core/tokens.py</code>, <code>prompt_redact_core/errors.py</code>. Maps to the plan's <a href="../plans/m1-redactor-core.html#logic">core-logic</a> section (token format &amp; numbering, map-merge algorithm) and the <code>test_map_merge.py</code> test file.</p>
+
+<h2>Token map contract (this spec's working definition)</h2>
+
+<p>The caller-owned token map is a <strong>flat dict mapping token &rarr; original</strong>, e.g. <code>{"[PERSON_1]": "John Doe"}</code>. This direction makes <code>unredact</code> (Spec M1-03) a direct lookup and is round-tripped on every call per <a href="../decisions/0002-service-shape.html">ADR 0002</a>. The redact path builds the inverse (original &rarr; token) index internally so repeated identifiers reuse their token.</p>
+
+<p><em>Note:</em> the <strong>wire-contract</strong> shape (flat vs versioned envelope) is formally deferred to M2 (per the M1 plan's out-of-scope list). This spec fixes the <em>in-memory</em> shape only; M2 can wrap it.</p>
+
+<h2>Token format</h2>
+
+<p><code>[&lt;ENTITY_TYPE&gt;_&lt;N&gt;]</code> where:</p>
+<ul>
+  <li><code>ENTITY_TYPE</code> matches <code>[A-Z][A-Z_]*</code> — uppercase letters and underscores only (<code>PERSON</code>, <code>DATE_TIME</code>, <code>US_SSN</code>, <code>CREDIT_CARD</code>, custom <code>MRN</code>/<code>NPI</code>/<code>DEA</code>).</li>
+  <li><code>N</code> is a positive integer (<code>\d+</code>), allocated per entity type starting at <code>1</code>.</li>
+</ul>
+
+<p><strong>Why digits are excluded from the type</strong> (a deliberate constraint, not an accident): if the type could contain digits, the canonical token regex would be ambiguous. <code>[PERSON_12]</code> could parse as <code>(PERSON, 12)</code> or <code>(PERSON_1, 2)</code>, and a greedy matcher resolves it the wrong way. Restricting the type to <code>[A-Z_]+</code> makes <code>\[([A-Z][A-Z_]*)_(\d+)\]</code> an unambiguous parse. This is exactly the pattern the T5 guard (Spec M1-02) keys on, so the two specs share one definition of "what a token looks like."</p>
+
+<h2>Public surface (<code>tokens.py</code>)</h2>
+<ul>
+  <li><code>TOKEN_RE</code> — compiled canonical token pattern.</li>
+  <li><code>format_token(entity_type, n) -&gt; str</code> — validates the type and <code>n &ge; 1</code>; raises <code>InvalidEntityTypeError</code> / <code>ValueError</code> otherwise.</li>
+  <li><code>parse_token(s) -&gt; (type, n) | None</code> — exact full-string parse.</li>
+  <li><code>find_tokens(text) -&gt; list[TokenMatch]</code> — every token occurrence with offsets (the guard and unredactor reuse this).</li>
+  <li><code>Detection(start, end, entity_type, text)</code> — a frozen value object for a detected PII span (analyzer-agnostic, so the merge is testable without Presidio).</li>
+  <li><code>Replacement(start, end, token)</code> — a frozen replacement instruction.</li>
+  <li><code>assign_tokens(detections, token_map) -&gt; (replacements, new_map)</code> — the map-merge algorithm.</li>
+  <li><code>apply_replacements(text, replacements) -&gt; str</code> — right-to-left substitution.</li>
+</ul>
+
+<h2>Map-merge algorithm (<code>assign_tokens</code>)</h2>
+<ol>
+  <li><strong>Validate + index the supplied map.</strong> Each key must be a well-formed token (else <code>MalformedTokenMapError</code>). Build the reverse index <code>original &rarr; token</code>; if one original is mapped from two different tokens, the map is malformed (the redact-reuse lookup would be ambiguous) &rarr; <code>MalformedTokenMapError</code>. Track the highest <code>N</code> seen per type.</li>
+  <li><strong>Assign, in first-appearance order.</strong> Process detections sorted by <code>(start, end)</code> so the lowest <code>N</code> goes to the identifier that appears earliest — stable, human-readable numbering. For each detection: if its <code>text</code> is already in the reverse index, reuse that token; otherwise mint <code>max_N[type] + 1</code>, record it in the new map and the reverse index.</li>
+  <li><strong>Return</strong> the per-detection replacements plus a new map (the input map is not mutated).</li>
+</ol>
+
+<p><strong>Stability guarantees</strong> this gives us:</p>
+<ul>
+  <li>Same original &rarr; same token within a call <em>and</em> across calls (when the returned map is passed back in) — the cross-call requirement from the plan.</li>
+  <li>Numbering continues from the supplied map: a map already holding <code>[PERSON_2]</code> mints <code>[PERSON_3]</code> for the next new person.</li>
+  <li>Per-type counters are independent.</li>
+  <li>Minting is a function of detection <em>offsets</em>, not input list order — shuffling the detection list yields identical tokens.</li>
+</ul>
+
+<h2>Right-to-left replacement (<code>apply_replacements</code>)</h2>
+<p>Replacements are validated (in-bounds, <code>start &le; end</code>, non-overlapping &mdash; overlaps raise <code>OverlappingSpansError</code>) then applied in descending start order so each splice leaves the offsets of not-yet-applied spans valid.</p>
+
+<h2>Errors (<code>errors.py</code>)</h2>
+<ul>
+  <li><code>RedactError</code> — base for everything this library raises.</li>
+  <li><code>InvalidEntityTypeError(RedactError, ValueError)</code> — entity type doesn't match <code>[A-Z][A-Z_]*</code>.</li>
+  <li><code>MalformedTokenMapError(RedactError)</code> — supplied map has a non-token key or an ambiguous original.</li>
+  <li><code>OverlappingSpansError(RedactError)</code> — replacement spans overlap.</li>
+</ul>
+<p>Later specs extend this module (e.g. the T5 <code>TokenShapedInputError</code>, the unredact <code>TokenCollisionError</code>).</p>
+
+<h2>Resolved behaviour decisions</h2>
+<ul>
+  <li><strong>Same literal under two entity types &rarr; key by literal only.</strong> If one string is detected under two types in a single pass (e.g. <code>"12345"</code> as both <code>MRN</code> and <code>US_BANK_NUMBER</code>), both reuse the token minted for the first occurrence by offset. The value is identical so this always round-trips; the token's type label is just whichever type saw the literal first. (Decision 2026-06-05.)</li>
+  <li><strong>Empty-text detections are skipped.</strong> A detection with <code>text == ""</code> carries no value; it is dropped before assignment and never enters the map. A well-behaved analyzer does not emit them. (Decision 2026-06-05.)</li>
+</ul>
+
+<h2>Out of scope for this spec</h2>
+<ul>
+  <li>Detecting PII (that's the analyzer, Spec M1-04) — <code>assign_tokens</code> takes already-detected spans.</li>
+  <li>Case/whitespace normalization of originals — v1 dedupes by exact string match; documented, revisited only if the eval corpus shows it matters.</li>
+  <li>The T5 input guard and unredaction — their own specs (M1-02, M1-03), built on <code>find_tokens</code>.</li>
+</ul>
+
+<h2>Test plan</h2>
+<p><code>tests/test_tokens.py</code> (format/parse/find/apply) and <code>tests/test_map_merge.py</code> (assignment):</p>
+<ul>
+  <li>format/parse round-trips, including <code>DATE_TIME</code> (underscore in type) and multi-digit <code>N</code> (the <code>[PERSON_12]</code> ambiguity case).</li>
+  <li><code>format_token</code> rejects lowercase / digit-bearing types and <code>n &lt; 1</code>.</li>
+  <li><code>find_tokens</code> locates multiple tokens with correct offsets.</li>
+  <li><code>apply_replacements</code>: single, multiple (R&rarr;L correctness), overlap rejection, out-of-bounds rejection.</li>
+  <li>Map merge: empty map mints from 1; two distinct originals number by appearance; repeated original reuses its token; cross-call stability via round-tripped map; numbering continues from a pre-populated map; independent per-type counters; malformed-map rejections (bad key, ambiguous original); minting invariant under input-order shuffle.</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>tokens.py</code> + <code>errors.py</code> implemented; input map never mutated.</li>
+  <li>Both test files green under <code>pytest</code>.</li>
+  <li>No Presidio/spaCy import in either module (keeps the engine independently testable).</li>
+</ul>
+
+</body>
+</html>
