@@ -66,11 +66,16 @@ class Detection:
 
 @dataclass(frozen=True)
 class Replacement:
-    """An instruction to replace ``text[start:end]`` with ``token``."""
+    """An instruction to splice ``replacement`` into ``text[start:end]``.
+
+    The ``replacement`` string is a minted token on the redact side and an
+    original value on the unredact side; the direction-neutral name lets both
+    paths share :func:`apply_replacements`.
+    """
 
     start: int
     end: int
-    token: str
+    replacement: str
 
 
 def format_token(entity_type: str, n: int) -> str:
@@ -207,5 +212,5 @@ def apply_replacements(text: str, replacements: Iterable[Replacement]) -> str:
 
     out = text
     for r in sorted(ordered, key=lambda r: r.start, reverse=True):
-        out = out[: r.start] + r.token + out[r.end :]
+        out = out[: r.start] + r.replacement + out[r.end :]
     return out

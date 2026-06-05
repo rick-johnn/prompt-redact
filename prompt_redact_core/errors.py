@@ -47,3 +47,18 @@ class TokenShapedInputError(RedactError):
     def __init__(self, message: str, matches=None):
         super().__init__(message)
         self.matches = list(matches) if matches is not None else []
+
+
+class UnknownTokenError(RedactError):
+    """``unredact`` found a token in the text that is not a key in the map.
+
+    In a correct round trip this cannot happen (the T5 guard ensures redacted
+    text only contains tokens we minted into the map), so it signals a corrupted
+    or mismatched map. Carries ``matches`` — the unmapped ``TokenMatch``es — for
+    diagnostics. Takes the matches rather than importing ``TokenMatch`` to keep
+    this module dependency-free.
+    """
+
+    def __init__(self, message: str, matches=None):
+        super().__init__(message)
+        self.matches = list(matches) if matches is not None else []

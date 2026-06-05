@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-03: Unredactor</title>
+</head>
+<body>
+
+<h1>Spec M1-03 — Unredactor</h1>
+
+<p>Third implementation spec for <a href="../plans/m1-redactor-core.html">M1</a>. Implements <code>unredact(text, token_map) -&gt; text</code>: the centralized token &rarr; original substitution. Pure-Python; reuses <code>find_tokens</code> and <code>apply_replacements</code> from <a href="m1-01-token-engine.html">Spec M1-01</a> — no Presidio dependency.</p>
+
+<p>Module: <code>prompt_redact_core/unredactor.py</code>. New error: <code>UnknownTokenError</code> in <code>errors.py</code>. Maps to the plan's <a href="../plans/m1-redactor-core.html#scope">unredact()</a> scope item and the <code>test_unredactor.py</code> test file.</p>
+
+<p>The plan puts <code>unredact</code> in M1 (not M2) on purpose: the milestone exit criterion is a <em>round trip</em> over the corpus, and centralizing the substitution rules here keeps M2's <code>/unredact</code> a thin wrapper.</p>
+
+<h2>Algorithm</h2>
+<ol>
+  <li>Locate every <code>[TYPE_N]</code> in <code>text</code> with <code>find_tokens</code> (offsets, non-overlapping by construction).</li>
+  <li>For each, look up its original in the map. Collect a <code>Replacement(start, end, original)</code> per known token; collect unknown tokens separately.</li>
+  <li>If any token is unknown, raise <code>UnknownTokenError</code> (see below).</li>
+  <li>Otherwise apply the replacements with <code>apply_replacements</code> — right-to-left, single pass.</li>
+</ol>
+
+<h2>Why single-pass matters (the re-substitution trap)</h2>
+<p>An original value can itself contain a token-shaped substring — e.g. the map holds <code>{"[PERSON_1]": "agent [X_1] smith"}</code>. A naive find-and-replace loop that re-scans after each substitution would then try to "unredact" the <code>[X_1]</code> it just inserted, corrupting the output (or raising on an unknown token).</p>
+<p><code>apply_replacements</code> avoids this by design: it computes <em>all</em> splice offsets against the original redacted text up front and applies them right-to-left, so inserted originals are never re-scanned. Reusing it here gives the unredactor that guarantee for free — and is the reason this spec renames the <code>Replacement</code> field from <code>token</code> to the direction-neutral <code>replacement</code> (it carries a minted token on the redact side and an original value here).</p>
+
+<h2>Resolved behaviour decisions</h2>
+<ul>
+  <li><strong>Unknown token &rarr; raise (strict).</strong> If <code>text</code> contains a <code>[TYPE_N]</code> that is not a key in the map, <code>unredact</code> raises <code>UnknownTokenError</code> rather than leaving it in place or guessing. In a correct round trip this cannot happen: the T5 guard (<a href="m1-02-t5-guard.html">Spec M1-02</a>) ensures the only token shapes in redacted text are ones we minted into the map. An unknown token therefore signals a corrupted or mismatched map, which a redaction tool should surface loudly, not paper over. (Decision 2026-06-05; revisit if a lenient/partial-unredact mode is ever needed.)</li>
+  <li><strong>No full-map validation.</strong> <code>unredact</code> only reads the map by the keys present in <code>text</code>; it does not validate every map entry the way <code>assign_tokens</code> does. Validation belongs on the redact (minting) side; the unredact path is a pure lookup.</li>
+  <li><strong>Empty original is distinct from missing.</strong> Lookup uses <code>is None</code>, so a map entry whose value is the empty string is treated as known (substitutes to nothing), not as an unknown token. (In practice empty originals never enter the map — Spec M1-01 skips empty detections — but the distinction is made explicit.)</li>
+  <li><strong>No tokens / empty text &rarr; passthrough.</strong> Text with no token shapes (including <code>""</code>) is returned unchanged.</li>
+</ul>
+
+<h2>Round-trip property (tested now, without Presidio)</h2>
+<p>The headline property is <code>unredact(redact(text)) == text</code>. <code>redact</code> needs Presidio and arrives in Spec M1-06, but the round trip can be proven at the unit level today by standing in for the analyzer: construct detections by hand &rarr; <code>assign_tokens</code> &rarr; <code>apply_replacements</code> to get redacted text + map &rarr; <code>unredact</code> &rarr; assert it equals the original. This exercises the full token pipeline (mint, replace, look up, restore) end-to-end with synthetic spans, so Spec M1-06 only has to add real detection on top.</p>
+
+<h2>Public surface (<code>unredactor.py</code>)</h2>
+<ul>
+  <li><code>unredact(text, token_map) -&gt; str</code> — restore originals; raises <code>UnknownTokenError</code> on an unmapped token.</li>
+</ul>
+
+<h2>Error (<code>errors.py</code>)</h2>
+<ul>
+  <li><code>UnknownTokenError(RedactError)</code> — carries <code>.matches</code> (the unmapped <code>TokenMatch</code>es) and a message naming the first offender and its offset.</li>
+</ul>
+
+<h2>Refactor in this spec</h2>
+<p><code>Replacement.token</code> &rarr; <code>Replacement.replacement</code> (and the redact-side tests that read it). The field is the string spliced into the text; calling it <code>replacement</code> reads correctly whether it holds a token (redact) or an original (unredact), and lets both paths share <code>apply_replacements</code> without a misleading name. No behaviour change.</p>
+
+<h2>Test plan (<code>tests/test_unredactor.py</code>)</h2>
+<ul>
+  <li><strong>Basic:</strong> single token, multiple tokens, repeated token (same token twice &rarr; same original both times).</li>
+  <li><strong>Passthrough:</strong> empty string; text with no tokens.</li>
+  <li><strong>Single-pass safety:</strong> an original containing a token shape (<code>"agent [X_1] smith"</code>) is inserted verbatim and not re-substituted.</li>
+  <li><strong>Unknown token:</strong> raises <code>UnknownTokenError</code>; <code>.matches</code> names the offender(s); a partially-known text still raises (all-or-nothing).</li>
+  <li><strong>Empty-valued mapping:</strong> a token mapping to <code>""</code> substitutes to nothing rather than raising.</li>
+  <li><strong>Round trip (no Presidio):</strong> detections &rarr; <code>assign_tokens</code> &rarr; <code>apply_replacements</code> &rarr; <code>unredact</code> reconstructs the original, including repeated identifiers and Unicode text.</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>unredactor.py</code> + <code>UnknownTokenError</code> implemented; <code>Replacement</code> field renamed; redact tests updated and still green.</li>
+  <li><code>test_unredactor.py</code> green; full suite green; branch coverage 100%.</li>
+  <li>No Presidio/spaCy import in the module.</li>
+</ul>
+
+</body>
+</html>
