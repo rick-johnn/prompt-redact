@@ -1,4 +1,10 @@
-# Language-specific ignores will be added once the implementation language is picked (see docs/PLAN.md M0).
+# Python (M1 redactor core)
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
 
 # Env / secrets
 .env
