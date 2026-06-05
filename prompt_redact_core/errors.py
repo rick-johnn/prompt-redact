@@ -32,3 +32,18 @@ class MalformedTokenMapError(RedactError):
 
 class OverlappingSpansError(RedactError):
     """Two replacement spans overlap, so they cannot both be applied."""
+
+
+class TokenShapedInputError(RedactError):
+    """Caller input already contains a redaction-token-shaped substring (T5).
+
+    Carries ``matches`` — the list of offending occurrences (``TokenMatch`` from
+    :mod:`prompt_redact_core.tokens`) — so the M2 service can surface an
+    explanatory ``400``. The constructor takes the message and the matches
+    rather than a ``TokenMatch`` import, to keep this module free of any
+    dependency on ``tokens`` (which imports from here).
+    """
+
+    def __init__(self, message: str, matches=None):
+        super().__init__(message)
+        self.matches = list(matches) if matches is not None else []
