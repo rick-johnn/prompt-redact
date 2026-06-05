@@ -9,7 +9,7 @@
 <h1>ADR 0001 — Implementation language and process topology</h1>
 
 <ul>
-  <li><strong>Status:</strong> Proposed <em>(awaiting decision)</em></li>
+  <li><strong>Status:</strong> Accepted <em>(2026-06-05)</em></li>
   <li><strong>Date opened:</strong> 2026-05-30</li>
   <li><strong>Owners:</strong> rick-johnn</li>
   <li><strong>Supersedes:</strong> —</li>
@@ -18,7 +18,9 @@
 
 <h2>Context</h2>
 
-<p><code>prompt-redact</code> is a redaction proxy that sits between chat clients and an LLM backend. Earlier M0 decisions locked Microsoft Presidio as the redaction engine and an OpenAI-compatible API as the public surface.</p>
+<p><strong>Note (2026-06-05):</strong> this ADR was first drafted under the transparent-proxy design; <a href="0002-service-shape.html">ADR 0002</a> later changed the service shape to a standalone redaction microservice (<code>/redact</code> + <code>/unredact</code>, no LLM in the request path, no OpenAI-compatible surface, no streaming). The language-and-topology tradeoffs below still hold — but where the text says &ldquo;proxy&rdquo;, read &ldquo;the front-end service&rdquo;, and discount any point that assumed an in-path LLM call or SSE streaming. The Decision section reflects the current shape.</p>
+
+<p><code>prompt-redact</code> is a redaction microservice that callers invoke explicitly. Earlier M0 decisions locked Microsoft Presidio as the redaction engine.</p>
 
 <p>Presidio is a <strong>Python-only library</strong>. That single fact narrows the topology decision to a small number of viable shapes, and every other code-level choice (HTTP framework, test framework, container layout, deployment story) follows from it. We therefore need to make this decision deliberately, not by drift.</p>
 
@@ -43,7 +45,7 @@
   <tbody>
     <tr><td>Presidio integration cost</td><td>Either in-process (Python) or over IPC (anything else). IPC adds a contract, a deploy unit, and a failure mode.</td></tr>
     <tr><td>Operational simplicity</td><td>One image vs two. Fewer moving parts = easier audit, which matters under HIPAA.</td></tr>
-    <tr><td>Performance envelope</td><td>The bottleneck on a chat request is the LLM call (hundreds of ms to seconds), then the NER pass (tens of ms). The proxy shell itself is rarely the long pole.</td></tr>
+    <tr><td>Performance envelope</td><td>With no LLM in the request path (<a href="0002-service-shape.html">ADR 0002</a>), the long pole is the NER pass (tens of ms); the front-end shell is sub-millisecond. The front-end language is not the bottleneck.</td></tr>
     <tr><td>Team familiarity</td><td>Highest-leverage factor for velocity and maintainability.</td></tr>
     <tr><td>Container size &amp; cold start</td><td>spaCy/transformer model loading drives image size and warm-up time. Affects every container in the system.</td></tr>
     <tr><td>Audit/compliance surface</td><td>More services = more boundaries to threat-model, more secrets to rotate.</td></tr>
@@ -86,7 +88,7 @@
   <thead><tr><th>Pros</th><th>Cons</th></tr></thead>
   <tbody>
     <tr><td>Plays well if the consuming stack is already Node/TS</td><td>Two languages, same as Option B</td></tr>
-    <tr><td>Streaming SSE story is well-trodden in Node</td><td>Node perf &lt; Go for the proxy shell</td></tr>
+    <tr><td>Mature HTTP/server ecosystem</td><td>Node perf &lt; Go for the front-end shell</td></tr>
     <tr><td>Strong types via TS catch contract drift early</td><td>Same two-deploy operational cost</td></tr>
   </tbody>
 </table>
@@ -118,7 +120,7 @@
 
 <h2>Honest take (lean, not a decision)</h2>
 
-<p>For chat-rate traffic (likely well under 100 req/s per pod) and the latency profile of an LLM call, the proxy shell is not the bottleneck — the LLM call is, and the NER pass is the next-most-expensive thing. Both are bounded by Python. Switching to Go or Rust gains you a few ms in the proxy shell while paying for two languages, two deploys, and a new IPC boundary that needs auditing.</p>
+<p>For chat-rate traffic (likely well under 100 req/s per pod), the front-end shell is not the bottleneck — the NER pass is (the LLM is no longer in the request path per <a href="0002-service-shape.html">ADR 0002</a>), and it is bounded by Python. Switching the front-end to Go or Rust gains you a few ms in the shell while paying for two languages, two deploys, and a new IPC boundary that needs auditing.</p>
 
 <p><strong>The default that fits the constraints is Option A — full Python.</strong> The cases where another option clearly wins are:</p>
 <ul>
@@ -142,11 +144,20 @@
 
 <h2>Decision</h2>
 
-<p>— <em>(to be filled in once stakeholders weigh in on the missing inputs above)</em></p>
+<p><strong>Adopt the sidecar topology (Options B/C):</strong> a fast front-end service owns the HTTP surface (<code>/redact</code>, <code>/unredact</code>, <code>/healthz</code>) and calls a <strong>Python sidecar that hosts Presidio</strong> over a loopback-only IPC boundary. The front-end language is narrowed to <strong>Go or TypeScript</strong>; the final pick between the two is deferred to the start of M1 and decided on team familiarity and the surrounding stack.</p>
+
+<p>This deliberately selects the multi-language sidecar shape over the &ldquo;honest take&rdquo; lean toward Option A (single full-Python). The trade accepted: two deploy units, two CI pipelines, and a new IPC boundary, in exchange for keeping Presidio (the locked, Python-only engine) behind a lean, fast front-end that fits non-Python-first stacks.</p>
+
+<p><strong>Follow-ups this triggers:</strong></p>
+<ul>
+  <li>Add the loopback IPC boundary as a new row in the <a href="../ARCHITECTURE.html#threat-model">threat model</a> — it must stay loopback-only (never on the wire); require mutual TLS if the two halves ever split across hosts. (Added as T11.)</li>
+  <li>Pick the final front-end language (Go vs TypeScript) at M1 start; that pins the HTTP and test frameworks.</li>
+  <li>M4 packaging now ships <strong>two</strong> containers (front-end + Python sidecar), composed together.</li>
+</ul>
 
 <h2>References</h2>
 <ul>
-  <li><a href="../ARCHITECTURE.html">ARCHITECTURE.html</a> — &ldquo;Implementation stack — TBD&rdquo; table and open question #0</li>
+  <li><a href="../ARCHITECTURE.html">ARCHITECTURE.html</a> — &ldquo;Implementation stack&rdquo; table and open question #0</li>
   <li><a href="../PLAN.html">PLAN.html</a> — M0 checklist</li>
   <li><a href="../research/ner-engines-deep-dive.html">Research: NER engines deep-dive</a> — drills into spaCy, Presidio, ONNX, and alternative engines; contextualizes the speed comparison; analyzes &ldquo;offer both&rdquo; variants</li>
   <li>Presidio: <a href="https://github.com/microsoft/presidio">https://github.com/microsoft/presidio</a></li>
