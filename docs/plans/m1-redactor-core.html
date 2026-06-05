@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — M1 Plan: Redactor core</title>
+</head>
+<body>
+
+<h1>M1 Plan — Redactor core</h1>
+
+<p>Detailed plan for the <a href="../PLAN.html">M1</a> milestone. M1 builds a standalone Python redactor library — <strong>no HTTP, no service, no front-end</strong> (those are M2). The deliverable is the core logic that turns text + a caller-supplied token map into redacted text + an updated map, plus the synthetic eval corpus and harness needed to prove it meets the quality bar locked in M0.</p>
+
+<p><strong>Status:</strong> Ready — tooling confirmed (2026-06-05). Per <a href="../../CLAUDE.md">CLAUDE.md</a> this is a design deliverable; no source files are created until &ldquo;build&rdquo; is signalled.</p>
+
+<h2>Goal</h2>
+
+<p>A library function <code>redact(text, token_map) -&gt; (redacted_text, token_map)</code> that:</p>
+<ul>
+  <li>detects PII spans via Presidio (Presidio's default pipeline already runs regex recognizers before NER);</li>
+  <li>assigns <code>[TYPE_N]</code> tokens, reusing tokens for originals already present in the supplied map and minting new ones otherwise;</li>
+  <li>returns the redacted text and the merged map.</li>
+</ul>
+<p>Plus the matching <code>unredact(text, token_map) -&gt; text</code> substitution (see <a href="#scope">Scope</a> for why it's in M1), the eval corpus, the eval harness, and the test suite.</p>
+
+<h2 id="scope">Scope</h2>
+
+<h3>In scope</h3>
+<ul>
+  <li>Pure-Python redactor core (importable library; no network surface).</li>
+  <li><code>redact()</code> — analyze → token assignment + caller-map merge → right-to-left replacement.</li>
+  <li>Custom Presidio recognizers for domain identifiers not covered out of the box — MRN, payer/PBM member IDs, Rx numbers, prescriber NPI/DEA.</li>
+  <li><code>unredact()</code> — centralized token → original substitution. Included in M1 because the exit criterion is a <em>round-trip</em> over the corpus, and centralizing substitution rules (collision, partial matches) here keeps M2's <code>/unredact</code> a thin wrapper.</li>
+  <li>Token-shaped-substring guard (threat <a href="../ARCHITECTURE.html#threat-model">T5</a>) — raise a typed error the M2 service will map to <code>400</code>.</li>
+  <li>Synthetic, span-annotated <strong>eval corpus</strong> under <code>evals/</code> (a deliverable of its own; prerequisite for measuring the bar).</li>
+  <li><strong>Eval harness</strong> computing the M0 metrics; run as a regression gate.</li>
+  <li>Unit tests (see <a href="#tests">Test plan</a>).</li>
+</ul>
+
+<h3>Out of scope (deferred to M2+)</h3>
+<ul>
+  <li>HTTP service, the <code>/redact</code> / <code>/unredact</code> / <code>/healthz</code> endpoints (M2).</li>
+  <li>The Go/TypeScript front-end and the loopback IPC boundary (M2; see <a href="../decisions/0001-language-and-topology.html">ADR 0001</a>).</li>
+  <li>Dockerfile / docker-compose / k8s manifests (M4).</li>
+  <li>Per-call entity allow-lists / custom regexes — v1 takes the <code>language</code> hint only (M0 decision).</li>
+  <li>Token-map wire-contract shape (flat vs versioned envelope) — deferred to M2.</li>
+</ul>
+
+<h2 id="corpus">Prerequisite: synthetic eval corpus</h2>
+
+<p>The quality bar cannot be measured without a labelled dataset, so the corpus is built first (or alongside the redactor). <strong>Synthetic data only</strong> — no real PHI/PII in the repo, per <a href="../../CLAUDE.md">CLAUDE.md</a>.</p>
+
+<h3>Format (proposed)</h3>
+<p>JSONL, one record per input. Spans are character offsets so scoring is offset-based, not surface-form-based.</p>
+<pre>
+{
+  "id": "health-0001",
+  "domain": "healthcare",
+  "text": "Update patient John Doe, MRN 12345, seen 03/04/2021.",
+  "spans": [
+    {"start": 15, "end": 23, "type": "PERSON",    "value": "John Doe"},
+    {"start": 29, "end": 34, "type": "MRN",       "value": "12345"},
+    {"start": 41, "end": 51, "type": "DATE_TIME", "value": "03/04/2021"}
+  ]
+}
+</pre>
+
+<h3>Domain &amp; entity coverage</h3>
+<p>Baseline entity set = HIPAA Safe Harbor types (names, geographic subdivisions, dates finer than year, phone/fax, email, SSN, MRN, account/license numbers, vehicle/device IDs, URLs, IPs, etc.), generated across multiple domains so per-type recall can be stratified:</p>
+<ul>
+  <li>healthcare (names, DOB, MRN, dates) — HIPAA Safe Harbor baseline</li>
+  <li>finance (account numbers, card PANs, SSN)</li>
+  <li>payer / PBM identifiers (member IDs, Rx numbers, prescriber NPI/DEA) — require <strong>custom recognizers</strong>; not covered by Presidio out of the box</li>
+  <li>generic / GDPR PII (emails, phones, addresses, IPs, URLs)</li>
+  <li>adversarial cases: empty input, all-PII input, no-PII input, and inputs containing token-shaped substrings (for T5).</li>
+</ul>
+<p>Legal (client names, matter numbers) is a candidate for a later corpus expansion, not v1.</p>
+
+<h3>Labelling rubric</h3>
+<p>A short written rubric defining what counts as a span boundary per type (e.g. does a name include a title? does a date include the weekday?). Stored alongside the corpus so labels are reproducible and reviewable.</p>
+
+<h2 id="layout">Proposed module layout</h2>
+
+<pre>
+prompt_redact_core/          # the importable library
+  __init__.py
+  analyzer.py                # Presidio AnalyzerEngine wrapper + config (threshold, language, entities)
+  tokens.py                  # [TYPE_N] format; mint next N against a supplied map
+  redactor.py                # redact(): analyze -> assign -> replace R->L
+  unredactor.py              # unredact(): token -> original substitution
+  guards.py                  # T5 token-shaped-substring detection
+  recognizers.py             # custom Presidio recognizers (MRN, member ID, Rx, NPI, DEA)
+  errors.py                  # typed errors (e.g. TokenCollisionError)
+
+requirements.in              # direct deps (presidio-analyzer, spacy, en_core_web_lg, pytest)
+requirements.txt             # compiled + hash-pinned (pip-compile) — supports threat T8
+
+evals/
+  corpus/                    # *.jsonl synthetic, span-annotated
+  rubric.md                  # labelling rubric
+  run_eval.py                # metrics + regression gate
+
+tests/
+  test_redactor.py
+  test_unredactor.py
+  test_map_merge.py
+  test_guards.py
+  test_recognizers.py
+  test_edge_cases.py
+</pre>
+<p>Plain <code>pip</code> + <code>venv</code> with a hash-pinned <code>requirements.txt</code> (compiled from <code>requirements.in</code>). No <code>src/</code> layout needed for a single library package at this stage.</p>
+
+<h2 id="logic">Core logic details</h2>
+
+<h3>Token format &amp; numbering</h3>
+<p><code>[&lt;ENTITY_TYPE&gt;_&lt;N&gt;]</code>. <em>N</em> is allocated against the <strong>caller-supplied map</strong>, not a per-process counter — so numbering is stable across calls and across replicas (the core holds no state). If the map already has <code>[PERSON_1]</code>/<code>[PERSON_2]</code>, a new person becomes <code>[PERSON_3]</code>.</p>
+
+<h3>Map-merge algorithm</h3>
+<ol>
+  <li>Build a reverse index <code>original → token</code> from the supplied map.</li>
+  <li>For each detected span: if its original is already in the reverse index, reuse that token; else mint the next <code>N</code> for that entity type and add it to the map.</li>
+  <li>Apply replacements <strong>right-to-left</strong> (descending start offset) so earlier offsets stay valid as the string mutates.</li>
+</ol>
+
+<h3>Confidence threshold</h3>
+<p>Start at Presidio defaults (M0 decision); expose the threshold as config; tune it against the corpus during M1, trading recall vs precision. Re-run the full eval on every threshold/recognizer change (regression gate).</p>
+
+<h3>T5 guard</h3>
+<p>Pre-scan input for the pattern <code>\[[A-Z_]+_\d+\]</code>. On a hit, raise a typed error (M2 maps it to <code>400</code> with an explanatory message). Documented as a caller constraint.</p>
+
+<h2 id="harness">Eval harness &amp; metrics</h2>
+
+<p>Metrics, computed by <code>run_eval.py</code> over the corpus (definitions per <a href="../ARCHITECTURE.html#redaction-quality-targets">ARCHITECTURE — quality targets</a>):</p>
+<ul>
+  <li><strong>Per-entity recall</strong> and <strong>per-entity precision</strong>, stratified by type (overall numbers hide per-type failures).</li>
+  <li><strong>Span-level F1</strong> by character offset (a partial match that leaves part of a name visible counts as a miss).</li>
+  <li><strong>End-to-end leakage rate</strong> — fraction of inputs where <em>any</em> labelled span escaped redaction. This is the compliance-facing number.</li>
+</ul>
+<p>The harness compares spans by offset (not surface form) and exits non-zero if any gate is missed, so it can run in CI.</p>
+
+<h2 id="tests">Test plan</h2>
+<ul>
+  <li>Detection across types: names, phone numbers, emails, dates, addresses, MRN-shaped IDs, financial PANs.</li>
+  <li>Cross-call token stability: the same identifier, with the map passed back in, gets the same token across calls.</li>
+  <li>Edge cases: empty input, all-PII input, no-PII input.</li>
+  <li>T5: inputs containing token-shaped substrings are rejected.</li>
+  <li>Round-trip fidelity: <code>unredact(redact(text))</code> reconstructs the original for the corpus.</li>
+</ul>
+
+<h2 id="tooling">Tooling (confirmed — 2026-06-05)</h2>
+<table>
+  <thead><tr><th>Choice</th><th>Decision</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Python version</td><td>3.11+</td><td>Matches current Presidio/spaCy support.</td></tr>
+    <tr><td>Dependency manager</td><td><strong>pip + venv</strong></td><td>Hash-pinned <code>requirements.txt</code> compiled from <code>requirements.in</code> (e.g. <code>pip-compile</code>) for reproducibility — supports threat T8.</td></tr>
+    <tr><td>Test framework</td><td>pytest</td><td>De-facto standard.</td></tr>
+    <tr><td>spaCy model</td><td><strong>en_core_web_lg</strong></td><td>Presidio default; CPU-friendly. Escalate to <code>en_core_web_trf</code> only if the recall gate (&ge; 0.99) can't be met with <code>lg</code> + recognizer tuning.</td></tr>
+    <tr><td>Engine</td><td>Presidio <em>(locked, M0)</em></td><td>Analyzer + custom anonymization for the token format.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="exit">Exit criteria</h2>
+<ul>
+  <li>Test suite green.</li>
+  <li>On the synthetic corpus: per-entity recall <strong>&ge; 0.99</strong> and end-to-end leakage <strong>&le; 1/10,000</strong> (the M0 bar).</li>
+  <li><code>unredact(redact(text))</code> round-trips the corpus losslessly.</li>
+  <li>Eval harness runnable as a regression gate.</li>
+</ul>
+<p>Latency (p95 &le; 50 ms) is validated more meaningfully in M2/M3 under the service; M1 records a baseline.</p>
+
+<h2 id="sequence">Sequencing</h2>
+<ol>
+  <li>Confirm tooling (below).</li>
+  <li>Build the synthetic corpus + labelling rubric (small first slice, expand).</li>
+  <li>Stand up the eval harness against the corpus (red, since no redactor yet).</li>
+  <li>Implement <code>analyzer.py</code> + <code>tokens.py</code> + <code>redactor.py</code>; iterate threshold to green the recall gate.</li>
+  <li>Implement <code>unredactor.py</code> + <code>guards.py</code>.</li>
+  <li>Fill out the test suite; wire the eval harness as a regression gate.</li>
+</ol>
+
+<h2 id="open">Open items</h2>
+<ol>
+  <li><strong>Front-end language (Go vs TS):</strong> ADR 0001 nominally picks this &ldquo;at M1 start,&rdquo; but M1 is pure Python — so it does <em>not</em> block M1 core work and can be settled before M2. Flagging so it isn't forgotten.</li>
+  <li><strong>spaCy escalation (contingency, not blocking):</strong> if <code>en_core_web_lg</code> + recognizer tuning can't reach per-entity recall &ge; 0.99 on the corpus, escalate to <code>en_core_web_trf</code> and re-measure the size/latency cost before committing.</li>
+</ol>
+
+</body>
+</html>
