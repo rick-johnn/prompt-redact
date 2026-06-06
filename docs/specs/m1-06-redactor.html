@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-06: Redactor</title>
+</head>
+<body>
+
+<h1>Spec M1-06 — Redactor</h1>
+
+<p>Sixth implementation spec for <a href="../plans/m1-redactor-core.html">M1</a>. Implements <code>redact(text, token_map) -&gt; (redacted_text, token_map)</code>: the top-level entry point that ties the already-built pieces together. It is the reverse of <a href="m1-03-unredactor.html"><code>unredact</code></a>.</p>
+
+<p>Module: <code>prompt_redact_core/redactor.py</code>. No new errors. Maps to the plan's <a href="../plans/m1-redactor-core.html#scope"><code>redact()</code></a> scope item and the <code>test_redactor.py</code> test file.</p>
+
+<h2>What it composes</h2>
+<ul>
+  <li><a href="m1-02-t5-guard.html">Spec M1-02</a> — <code>assert_no_token_shapes</code> (the T5 input precondition).</li>
+  <li><a href="m1-04-analyzer.html">Spec M1-04</a> — <code>RedactionAnalyzer.analyze</code> (PII detection &rarr; non-overlapping <code>Detection</code>s).</li>
+  <li><a href="m1-01-token-engine.html">Spec M1-01</a> — <code>assign_tokens</code> (caller-map merge) and <code>apply_replacements</code> (right-to-left splice).</li>
+</ul>
+<p>By M1-06 every part already exists and is tested; this spec is thin orchestration plus the end-to-end tests that prove the parts compose.</p>
+
+<h2>Algorithm</h2>
+<ol>
+  <li><strong>Guard.</strong> <code>assert_no_token_shapes(text)</code> — reject input that already contains a <code>[TYPE_N]</code> shape (raises <code>TokenShapedInputError</code>) <em>before</em> any analysis. Running first avoids paying for detection on input we will reject, and keeps the minted-token vocabulary unambiguous (threat T5).</li>
+  <li><strong>Detect.</strong> <code>detections = analyzer.analyze(text)</code>.</li>
+  <li><strong>Assign.</strong> <code>replacements, new_map = assign_tokens(detections, token_map or {})</code> — known originals reuse their token, new ones mint <code>max_N + 1</code> for their type. The input map is copied, never mutated.</li>
+  <li><strong>Replace.</strong> <code>apply_replacements(text, replacements)</code> — single pass, right-to-left.</li>
+</ol>
+
+<h2>Resolved behaviour decisions</h2>
+<ul>
+  <li><strong>The analyzer is injected, not constructed.</strong> <code>redact</code> takes <code>analyzer</code> as a required keyword-only argument rather than building one internally. The analyzer owns the spaCy model (hundreds of MB, seconds to load); a fresh one per call would reload it. The caller — and in M2 the service, once at startup — builds one <code>RedactionAnalyzer</code> and reuses it. Any object exposing <code>analyze(text) -&gt; list[Detection]</code> satisfies the contract, which is also how the tests inject a fake. (Decision 2026-06-05; a convenience default that lazily builds and caches an analyzer was rejected to avoid hidden global state and per-config surprises.)</li>
+  <li><strong>Guard before detect.</strong> The T5 guard runs first, so token-shaped input is rejected without invoking the analyzer at all.</li>
+  <li><strong>Return shape: a plain <code>(str, dict)</code> tuple.</strong> Matches <code>assign_tokens</code>' tuple return and the plan's <code>redact(...) -&gt; (redacted_text, token_map)</code>. The returned map is a fresh dict the caller owns and round-trips (ADR 0002).</li>
+  <li><strong>No PII / empty text.</strong> Falls out of the algorithm: no detections &rarr; no replacements &rarr; text returned unchanged, with a copy of the supplied map.</li>
+  <li><strong>Token-map contract.</strong> In-memory flat <code>token -&gt; original</code> dict, same as the rest of M1. The wire/versioning shape stays deferred to M2 (M0 decision).</li>
+</ul>
+
+<h2>Round-trip property</h2>
+<p>The headline property <code>unredact(redact(text)) == text</code> was already proven at the token-pipeline level in <a href="m1-03-unredactor.html">Spec M1-03</a> using synthetic detections. M1-06 closes it for real by adding detection on top: an integration test redacts a sample with the live analyzer and asserts the round trip, that the raw identifiers are absent from the redacted text, and that at least one token was minted.</p>
+
+<h2>Public surface (<code>redactor.py</code>)</h2>
+<ul>
+  <li><code>redact(text, token_map=None, *, analyzer) -&gt; tuple[str, dict[str, str]]</code> — redact PII; raises <code>TokenShapedInputError</code> (T5) on token-shaped input. Exported from the package as <code>prompt_redact_core.redact</code>.</li>
+</ul>
+<p>No new module-level state and no Presidio import in <code>redactor.py</code> itself — Presidio arrives only through whatever analyzer the caller passes.</p>
+
+<h2>Test plan (<code>tests/test_redactor.py</code>)</h2>
+<ul>
+  <li><strong>Without Presidio (fake analyzer):</strong> single detection; multiple distinct identifiers &rarr; distinct tokens; repeated identifier in one call &rarr; same token; no detections &rarr; identity + empty map; empty text; detections supplied out of offset order still number by offset.</li>
+  <li><strong>Cross-call continuity:</strong> passing the returned map back in reuses tokens for known originals and mints the next number for new ones.</li>
+  <li><strong>Map immutability:</strong> the supplied map object is not mutated and a fresh dict is returned.</li>
+  <li><strong>T5:</strong> token-shaped input raises <code>TokenShapedInputError</code> and the analyzer is never called.</li>
+  <li><strong>Round trip (fake):</strong> <code>unredact(redact(text)) == text</code>.</li>
+  <li><strong>Integration (real Presidio, skipped if unavailable):</strong> redact a sample, assert round trip, that raw identifiers are gone, and that a token was minted.</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>redactor.py</code> implemented; <code>redact</code> exported from <code>__init__.py</code>.</li>
+  <li><code>test_redactor.py</code> green; full suite green; branch coverage 100% for the module (excluding integration-only paths).</li>
+  <li>No Presidio/spaCy import in <code>redactor.py</code>.</li>
+</ul>
+
+</body>
+</html>
