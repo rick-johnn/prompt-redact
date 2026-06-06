@@ -34,14 +34,11 @@ class OverlappingSpansError(RedactError):
     """Two replacement spans overlap, so they cannot both be applied."""
 
 
-class TokenShapedInputError(RedactError):
-    """Caller input already contains a redaction-token-shaped substring (T5).
+class _MatchCarryingError(RedactError):
+    """Base for errors that carry the offending ``TokenMatch``es for diagnostics.
 
-    Carries ``matches`` — the list of offending occurrences (``TokenMatch`` from
-    :mod:`prompt_redact_core.tokens`) — so the M2 service can surface an
-    explanatory ``400``. The constructor takes the message and the matches
-    rather than a ``TokenMatch`` import, to keep this module free of any
-    dependency on ``tokens`` (which imports from here).
+    The matches are passed in (rather than importing ``TokenMatch``) so this
+    module stays free of any dependency on ``tokens``, which imports from here.
     """
 
     def __init__(self, message: str, matches=None):
@@ -49,16 +46,18 @@ class TokenShapedInputError(RedactError):
         self.matches = list(matches) if matches is not None else []
 
 
-class UnknownTokenError(RedactError):
+class TokenShapedInputError(_MatchCarryingError):
+    """Caller input already contains a redaction-token-shaped substring (T5).
+
+    Carries the offending occurrences in ``matches`` so the M2 service can
+    surface an explanatory ``400``.
+    """
+
+
+class UnknownTokenError(_MatchCarryingError):
     """``unredact`` found a token in the text that is not a key in the map.
 
     In a correct round trip this cannot happen (the T5 guard ensures redacted
     text only contains tokens we minted into the map), so it signals a corrupted
-    or mismatched map. Carries ``matches`` — the unmapped ``TokenMatch``es — for
-    diagnostics. Takes the matches rather than importing ``TokenMatch`` to keep
-    this module dependency-free.
+    or mismatched map. Carries the unmapped tokens in ``matches``.
     """
-
-    def __init__(self, message: str, matches=None):
-        super().__init__(message)
-        self.matches = list(matches) if matches is not None else []

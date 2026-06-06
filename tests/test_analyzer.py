@@ -78,6 +78,17 @@ def test_resolve_overlaps_empty():
     assert resolve_overlaps([]) == []
 
 
+def test_empty_entities_tuple_detects_nothing_without_building_engine():
+    # Regression: an empty tuple is falsy and once collapsed to "all types".
+    # It now means "detect nothing" and short-circuits before the engine loads,
+    # so this needs no model.
+    from prompt_redact_core.analyzer import RedactionAnalyzer
+
+    a = RedactionAnalyzer(AnalyzerConfig(entities=()))
+    assert a.analyze("John Smith emailed john@example.com") == []
+    assert a._engine is None  # never built the engine
+
+
 def test_to_detections_slices_and_sorts():
     text = "John met Jane"
     spans = [_span(9, 13, "PERSON", 0.9), _span(0, 4, "PERSON", 0.9)]

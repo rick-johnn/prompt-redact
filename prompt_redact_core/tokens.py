@@ -30,8 +30,15 @@ from .errors import (
 # See docs/specs/m1-01-token-engine.html. This is the same shape the T5 guard
 # (Spec M1-02) keys on.
 _TYPE = r"[A-Z][A-Z_]*"
-TOKEN_RE = re.compile(rf"\[({_TYPE})_(\d+)\]")
-_FULL_TOKEN_RE = re.compile(rf"^\[({_TYPE})_(\d+)\]$")
+# N is a positive integer with no leading zeros. The recognizer grammar must
+# match exactly what we *mint* (format_token rejects n < 1, and ints never carry
+# leading zeros): if it admitted [TYPE_0] or [TYPE_01], find_tokens would yield a
+# match whose .token property re-renders to a different, canonical token — which
+# both crashes (n=0 fails format_token) and aliases leading-zero forms. Keeping
+# this in lockstep with minting is the same discipline the T5 guard relies on.
+_N = r"[1-9]\d*"
+TOKEN_RE = re.compile(rf"\[({_TYPE})_({_N})\]")
+_FULL_TOKEN_RE = re.compile(rf"^\[({_TYPE})_({_N})\]$")
 _VALID_TYPE_RE = re.compile(rf"^{_TYPE}$")
 
 

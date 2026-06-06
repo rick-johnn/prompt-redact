@@ -93,3 +93,12 @@ def test_digit_bearing_types_are_not_token_shaped(text):
     # confused with a minted token -> accepted.
     assert contains_token_shapes(text) is False
     assert assert_no_token_shapes(text) is None
+
+
+@pytest.mark.parametrize("text", ["[PERSON_0]", "[PERSON_01]", "[PERSON_007]"])
+def test_zero_and_leading_zero_forms_do_not_crash_and_are_accepted(text):
+    # Regression: these once matched find_tokens and crashed .token with a raw
+    # ValueError. They are not minted forms, so the guard must accept them
+    # cleanly (no exception of any kind).
+    assert contains_token_shapes(text) is False
+    assert assert_no_token_shapes(text) is None

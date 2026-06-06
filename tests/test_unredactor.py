@@ -96,6 +96,13 @@ def test_empty_valued_mapping_is_known():
     assert unredact("x[REDACTED_1]y", {"[REDACTED_1]": ""}) == "xy"
 
 
+@pytest.mark.parametrize("text", ["[PERSON_0] x", "say [PERSON_01] now", "[PERSON_007]"])
+def test_zero_and_leading_zero_forms_pass_through_without_crash(text):
+    # Regression: these once crashed in unredact (.token raised ValueError).
+    # They are not minted token forms, so they are left untouched.
+    assert unredact(text, {"[PERSON_7]": "LEAK"}) == text
+
+
 # --- round-trip property (no Presidio): mint -> replace -> unredact ----------
 
 def _redact(text, detections, token_map=None):

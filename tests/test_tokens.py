@@ -73,6 +73,9 @@ def test_parse_token_roundtrip(token, expected):
         "[PERSON_]",         # missing number
         "[PERSON]",          # no number at all
         "[PERSON_1][X_2]",   # two tokens, not one
+        "[PERSON_0]",        # n must be >= 1 (we never mint _0)
+        "[PERSON_01]",       # no leading zeros (we never mint _01)
+        "[PERSON_007]",      # leading zeros must not alias to [PERSON_7]
         "",
     ],
 )
@@ -93,6 +96,21 @@ def test_find_tokens_locates_all_with_offsets():
 
 def test_find_tokens_empty_when_none():
     assert find_tokens("no tokens here") == []
+
+
+@pytest.mark.parametrize("text", ["[PERSON_0]", "[PERSON_01]", "[PERSON_007]"])
+def test_find_tokens_ignores_zero_and_leading_zero(text):
+    # The recognizer grammar matches only what we mint (n >= 1, no leading
+    # zeros). Regression: previously [PERSON_0] matched and crashed .token.
+    assert find_tokens(text) == []
+
+
+def test_find_tokens_token_property_matches_slice_for_all_matches():
+    # Invariant: every match's reconstructed .token equals the text it covers
+    # (would break if leading-zero forms were matched).
+    text = "[PERSON_1] [DATE_TIME_10] [US_SSN_100]"
+    for m in find_tokens(text):
+        assert text[m.start : m.end] == m.token
 
 
 def test_find_tokens_adjacent():

@@ -106,6 +106,12 @@ class RedactionAnalyzer:
     """Configurable wrapper over Presidio's ``AnalyzerEngine``.
 
     The engine (and the spaCy model) is built lazily on first ``analyze`` call.
+
+    Thread-safety: a single instance is safe to ``analyze`` concurrently *once
+    built*, but the lazy first build is not synchronized — two threads racing the
+    very first ``analyze`` may each construct an engine (correct results, wasted
+    load). The M2 service should build the engine eagerly at startup (call
+    ``analyzer.engine`` once) before serving concurrent requests.
     """
 
     def __init__(self, config: Optional[AnalyzerConfig] = None):
@@ -141,10 +147,15 @@ class RedactionAnalyzer:
 
     def analyze(self, text: str) -> list[Detection]:
         """Detect PII in ``text`` and return clean, non-overlapping ``Detection``s."""
+        entities = self.config.entities
+        # entities is None -> all supported types; an explicitly empty tuple
+        # means "detect nothing" and must not collapse (falsy) into "all".
+        if entities is not None and len(entities) == 0:
+            return []
         results = self.engine.analyze(
             text=text,
             language=self.config.language,
-            entities=list(self.config.entities) if self.config.entities else None,
+            entities=list(entities) if entities else None,
             score_threshold=self.config.score_threshold,
         )
         spans = [ScoredSpan(r.start, r.end, r.entity_type, r.score) for r in results]
