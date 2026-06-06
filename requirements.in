@@ -1,0 +1,28 @@
+# Direct dependencies for prompt-redact (Spec M1-09).
+#
+# This is the SOURCE list. The reproducible, fully-pinned install is
+# requirements.txt, produced WITH HASHES via:
+#
+#     pip-compile --generate-hashes requirements.in
+#
+# Run that on a networked machine and commit the result. Hash-pinning every
+# transitive dependency is the threat-T8 (supply-chain) mitigation; until the
+# file can be compiled with hashes it is intentionally not committed.
+
+# --- runtime ---
+presidio-analyzer>=2.2,<3
+spacy>=3.7,<4
+
+# The spaCy NER model the analyzer defaults to (en_core_web_lg, ~560 MB). It is
+# not on PyPI; install it with:
+#
+#     python -m spacy download en_core_web_lg
+#
+# For a pinned / offline install (threat T8 — mirror the artifact inside the
+# trust boundary), add its release wheel here instead, aligned to the resolved
+# spaCy version, e.g.:
+#
+#     en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.7.1/en_core_web_lg-3.7.1-py3-none-any.whl
+
+# --- test ---
+pytest>=8,<9

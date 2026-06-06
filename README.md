@@ -83,11 +83,41 @@ Project documentation under `docs/` is authored in HTML, not markdown (see [`CLA
 
 - [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) — components, API surface, data flow, token-map handling (FAQ), threat model, redaction quality targets, deployment-target sketch, alternatives, open questions
 - [`docs/PLAN.html`](docs/PLAN.html) — milestones from M0 (design freeze) through MVP and beyond
-- [`docs/decisions/0001-language-and-topology.html`](docs/decisions/0001-language-and-topology.html) — ADR (status: Proposed) for the language and process-topology decision
+- [`docs/decisions/0001-language-and-topology.html`](docs/decisions/0001-language-and-topology.html) — ADR (status: Accepted) for the language and sidecar-topology decision
 - [`docs/decisions/0002-service-shape.html`](docs/decisions/0002-service-shape.html) — ADR (status: Accepted) for the pivot from transparent LLM proxy to redaction microservice
 - [`docs/research/ner-engines-deep-dive.html`](docs/research/ner-engines-deep-dive.html) — research note on spaCy, Presidio, ONNX, and alternative engines; informs ADR 0001
 - [`CLAUDE.md`](CLAUDE.md) — instructions for Claude Code when working in this repo
 - [`skills/karpathy-guidelines/SKILL.md`](skills/karpathy-guidelines/SKILL.md) — vendored coding guidelines
+
+## Development
+
+Requires Python 3.11+. The redaction core (`prompt_redact_core/`) and the eval corpus (`evals/`) import nothing heavy on their own; Presidio and the spaCy model are only needed to actually run detection.
+
+```sh
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.in          # or requirements.txt once it is compiled (below)
+python -m spacy download en_core_web_lg  # the NER model (~560 MB)
+```
+
+Run the tests — integration tests that need Presidio/the model **auto-skip** if it isn't installed, so the pure logic is testable with no ML stack:
+
+```sh
+pytest
+```
+
+Run the redaction-quality gate (the M1 exit gate — per-entity recall ≥ 0.99 on the gated entity types):
+
+```sh
+python -m evals.run_eval            # defaults: 50 examples/template, seed 0
+python -m evals.run_eval 500 0      # larger corpus for tighter estimates
+```
+
+For a reproducible, hash-pinned install (recommended for any deployment — threat T8), compile `requirements.txt` from `requirements.in` on a networked machine and commit it:
+
+```sh
+pip install pip-tools
+pip-compile --generate-hashes requirements.in
+```
 
 ## Attribution
 
