@@ -10,7 +10,11 @@ from .errors import (
     MalformedTokenMapError,
     OverlappingSpansError,
     RedactError,
+    TokenShapedInputError,
+    UnknownTokenError,
 )
+from .guards import assert_no_token_shapes, contains_token_shapes
+from .unredactor import unredact
 from .tokens import (
     TOKEN_RE,
     Detection,
@@ -29,6 +33,13 @@ __all__ = [
     "InvalidEntityTypeError",
     "MalformedTokenMapError",
     "OverlappingSpansError",
+    "TokenShapedInputError",
+    "UnknownTokenError",
+    # guards (T5)
+    "contains_token_shapes",
+    "assert_no_token_shapes",
+    # unredaction
+    "unredact",
     # token engine
     "TOKEN_RE",
     "Detection",

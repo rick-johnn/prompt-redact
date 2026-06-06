@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-02: T5 token-shaped-input guard</title>
+</head>
+<body>
+
+<h1>Spec M1-02 — T5 token-shaped-input guard</h1>
+
+<p>Second implementation spec for <a href="../plans/m1-redactor-core.html">M1</a>. Implements the threat-<a href="../ARCHITECTURE.html#threat-model">T5</a> guard: reject caller input that already contains a substring shaped like one of our redaction tokens. Pure-Python, builds directly on <code>find_tokens</code> from <a href="m1-01-token-engine.html">Spec M1-01</a> — no Presidio dependency.</p>
+
+<p>Module: <code>prompt_redact_core/guards.py</code>. New error: <code>TokenShapedInputError</code> in <code>errors.py</code>. Maps to the plan's <a href="../plans/m1-redactor-core.html#logic">T5 guard</a> note and the <code>test_guards.py</code> test file.</p>
+
+<h2>The invariant being protected</h2>
+
+<p>The whole redact/unredact contract rests on one invariant:</p>
+<blockquote><strong>Every <code>[TYPE_N]</code> substring in redacted text is one this library minted</strong> and recorded in the token map.</blockquote>
+
+<p>If a caller's <em>raw input</em> already contains <code>[PERSON_1]</code>, that invariant breaks two ways:</p>
+<ul>
+  <li><strong>Redact side:</strong> the literal <code>[PERSON_1]</code> passes through into the redacted output, which now contains a token that does <em>not</em> correspond to anything in the map — indistinguishable from a real one.</li>
+  <li><strong>Unredact side:</strong> on the round trip, <code>unredact</code> would substitute that stray <code>[PERSON_1]</code> with whatever the map holds for it (or, if the caller minted a real <code>[PERSON_1]</code> elsewhere, corrupt the caller's literal text). Either way the output is wrong.</li>
+</ul>
+
+<p>Rather than try to escape or disambiguate, v1 <strong>rejects</strong> such input with a typed error. This is documented as a caller constraint (the M2 service maps the error to <code>400</code>). It is a narrow, well-defined restriction: real-world PII text essentially never contains <code>[UPPER_SNAKE_123]</code> bracketed substrings.</p>
+
+<h2>Where the guard runs</h2>
+<ul>
+  <li><strong>redact() entry (Spec M1-06):</strong> yes. The input is the caller's raw text; it must not already contain token shapes.</li>
+  <li><strong>unredact() entry (Spec M1-03):</strong> no. There the input <em>is</em> redacted text and is <em>supposed</em> to be full of tokens. Running the guard there would reject every legitimate call.</li>
+</ul>
+<p>So the guard is a redact-path precondition only. This spec ships the guard function; Spec M1-06 wires it into <code>redact()</code>.</p>
+
+<h2>Grammar: deliberately the minting grammar</h2>
+
+<p>The plan sketches the guard pattern as <code>\[[A-Z_]+_\d+\]</code>. This spec instead reuses the canonical <code>TOKEN_RE</code> from Spec M1-01 (<code>\[([A-Z][A-Z_]*)_(\d+)\]</code>) via <code>find_tokens</code>, so the guard and the minter share <strong>one</strong> definition of "what a token looks like." Rationale:</p>
+<ul>
+  <li>Only strings matching the grammar we actually <em>mint</em> can collide on the round trip. A leading-underscore form like <code>[_X_1]</code> is matched by the plan's broader <code>[A-Z_]+</code> but is something this library never produces, so it cannot collide — rejecting it would be a false positive against legitimate input.</li>
+  <li>Tying the guard to <code>TOKEN_RE</code> means the guard can never reject a string we would mint, nor admit one we would — the two stay in lockstep if the token grammar ever changes.</li>
+</ul>
+<p>Consequence (documented, intentional): lowercase (<code>[person_1]</code>), digit-in-type (<code>[X1_2]</code>), no-number (<code>[PERSON]</code>), and unclosed (<code>[PERSON_1</code>) forms are <em>not</em> rejected, because none of them can be confused with a minted token.</p>
+
+<h2>Public surface (<code>guards.py</code>)</h2>
+<ul>
+  <li><code>contains_token_shapes(text) -&gt; bool</code> — non-raising check (does the text contain any minted-token-shaped substring?).</li>
+  <li><code>assert_no_token_shapes(text) -&gt; None</code> — raises <code>TokenShapedInputError</code> if it does; the error carries every offending match (token + offset) so the M2 layer can build an explanatory <code>400</code>.</li>
+</ul>
+
+<h2>Error (<code>errors.py</code>)</h2>
+<ul>
+  <li><code>TokenShapedInputError(RedactError)</code> — carries <code>.matches</code> (the list of offending <code>TokenMatch</code>es) and a human-readable message naming the first offender and its offset.</li>
+</ul>
+
+<h2>Test plan (<code>tests/test_guards.py</code>)</h2>
+<ul>
+  <li><strong>Accepted (no raise):</strong> plain text; empty string (M0: empty input is accepted); bracketed-but-not-token text (<code>[hello]</code>, <code>[PERSON]</code>); near-misses that can't collide (<code>[person_1]</code> lowercase, <code>[X1_2]</code> digit-in-type, <code>[PERSON_1</code> unclosed, <code>[_X_1]</code> leading underscore).</li>
+  <li><strong>Rejected (raise):</strong> a bare token; a token embedded in a sentence; multiple tokens; <code>DATE_TIME</code> (underscore type) and multi-digit <code>[PERSON_12]</code>.</li>
+  <li><strong>Error payload:</strong> <code>.matches</code> length and the first match's token/offset are correct; message names the first offender.</li>
+  <li><code>contains_token_shapes</code> returns the matching boolean for the accepted/rejected cases.</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>guards.py</code> + <code>TokenShapedInputError</code> implemented; guard shares <code>TOKEN_RE</code> with the minter (no second regex).</li>
+  <li><code>test_guards.py</code> green; full suite still green; branch coverage of the new module 100%.</li>
+  <li>No Presidio/spaCy import in the module.</li>
+</ul>
+
+</body>
+</html>

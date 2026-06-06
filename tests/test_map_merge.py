@@ -17,13 +17,13 @@ def _det(start, end, etype, text):
 def test_empty_map_mints_from_one():
     reps, new_map = assign_tokens([_det(0, 8, "PERSON", "John Doe")], {})
     assert new_map == {"[PERSON_1]": "John Doe"}
-    assert reps[0].token == "[PERSON_1]"
+    assert reps[0].replacement == "[PERSON_1]"
 
 
 def test_distinct_originals_numbered_by_appearance():
     dets = [_det(0, 4, "PERSON", "John"), _det(9, 13, "PERSON", "Jane")]
     reps, new_map = assign_tokens(dets, {})
-    assert [r.token for r in reps] == ["[PERSON_1]", "[PERSON_2]"]
+    assert [r.replacement for r in reps] == ["[PERSON_1]", "[PERSON_2]"]
     assert new_map == {"[PERSON_1]": "John", "[PERSON_2]": "Jane"}
 
 
@@ -31,7 +31,7 @@ def test_repeated_original_reuses_token_within_call():
     # "John" appears twice -> one token, two replacement instructions.
     dets = [_det(0, 4, "PERSON", "John"), _det(14, 18, "PERSON", "John")]
     reps, new_map = assign_tokens(dets, {})
-    assert [r.token for r in reps] == ["[PERSON_1]", "[PERSON_1]"]
+    assert [r.replacement for r in reps] == ["[PERSON_1]", "[PERSON_1]"]
     assert new_map == {"[PERSON_1]": "John"}
 
 
@@ -40,14 +40,14 @@ def test_cross_call_stability_via_returned_map():
     # Second call: same person reused, new person continues numbering.
     dets2 = [_det(0, 4, "PERSON", "John"), _det(9, 13, "PERSON", "Jane")]
     reps2, map2 = assign_tokens(dets2, map1)
-    assert [r.token for r in reps2] == ["[PERSON_1]", "[PERSON_2]"]
+    assert [r.replacement for r in reps2] == ["[PERSON_1]", "[PERSON_2]"]
     assert map2 == {"[PERSON_1]": "John", "[PERSON_2]": "Jane"}
 
 
 def test_numbering_continues_from_prepopulated_map():
     existing = {"[PERSON_1]": "Alice", "[PERSON_2]": "Bob"}
     reps, new_map = assign_tokens([_det(0, 3, "PERSON", "Cat")], existing)
-    assert reps[0].token == "[PERSON_3]"
+    assert reps[0].replacement == "[PERSON_3]"
     assert new_map["[PERSON_3]"] == "Cat"
 
 
@@ -58,7 +58,7 @@ def test_per_type_counters_are_independent():
         _det(30, 34, "PERSON", "Jane"),
     ]
     reps, _ = assign_tokens(dets, {})
-    assert [r.token for r in reps] == ["[PERSON_1]", "[EMAIL_ADDRESS_1]", "[PERSON_2]"]
+    assert [r.replacement for r in reps] == ["[PERSON_1]", "[EMAIL_ADDRESS_1]", "[PERSON_2]"]
 
 
 def test_minting_independent_of_input_order():
@@ -94,7 +94,7 @@ def test_same_literal_across_types_keys_by_literal_only():
     # "12345" seen first as MRN, later as US_BANK_NUMBER -> both reuse [MRN_1].
     dets = [_det(0, 5, "MRN", "12345"), _det(20, 25, "US_BANK_NUMBER", "12345")]
     reps, new_map = assign_tokens(dets, {})
-    assert [r.token for r in reps] == ["[MRN_1]", "[MRN_1]"]
+    assert [r.replacement for r in reps] == ["[MRN_1]", "[MRN_1]"]
     assert new_map == {"[MRN_1]": "12345"}
 
 
@@ -102,7 +102,7 @@ def test_empty_text_detection_is_skipped():
     dets = [_det(5, 5, "PERSON", ""), _det(10, 14, "PERSON", "John")]
     reps, new_map = assign_tokens(dets, {})
     # The empty detection produces no replacement and no map entry.
-    assert [r.token for r in reps] == ["[PERSON_1]"]
+    assert [r.replacement for r in reps] == ["[PERSON_1]"]
     assert new_map == {"[PERSON_1]": "John"}
 
 

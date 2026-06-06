@@ -1,0 +1,12 @@
+# Minimal project config. Packaging proper (requirements.in/.txt) lands with the
+# eval-harness spec; for now this only configures pytest.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires Presidio + the spaCy model (skipped if unavailable)",
+]
+# The ML stack (spaCy/torch) emits deprecation noise unrelated to our code.
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]

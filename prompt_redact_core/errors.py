@@ -32,3 +32,32 @@ class MalformedTokenMapError(RedactError):
 
 class OverlappingSpansError(RedactError):
     """Two replacement spans overlap, so they cannot both be applied."""
+
+
+class _MatchCarryingError(RedactError):
+    """Base for errors that carry the offending ``TokenMatch``es for diagnostics.
+
+    The matches are passed in (rather than importing ``TokenMatch``) so this
+    module stays free of any dependency on ``tokens``, which imports from here.
+    """
+
+    def __init__(self, message: str, matches=None):
+        super().__init__(message)
+        self.matches = list(matches) if matches is not None else []
+
+
+class TokenShapedInputError(_MatchCarryingError):
+    """Caller input already contains a redaction-token-shaped substring (T5).
+
+    Carries the offending occurrences in ``matches`` so the M2 service can
+    surface an explanatory ``400``.
+    """
+
+
+class UnknownTokenError(_MatchCarryingError):
+    """``unredact`` found a token in the text that is not a key in the map.
+
+    In a correct round trip this cannot happen (the T5 guard ensures redacted
+    text only contains tokens we minted into the map), so it signals a corrupted
+    or mismatched map. Carries the unmapped tokens in ``matches``.
+    """
