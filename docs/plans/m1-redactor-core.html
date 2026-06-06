@@ -10,7 +10,7 @@
 
 <p>Detailed plan for the <a href="../PLAN.html">M1</a> milestone. M1 builds a standalone Python redactor library — <strong>no HTTP, no service, no front-end</strong> (those are M2). The deliverable is the core logic that turns text + a caller-supplied token map into redacted text + an updated map, plus the synthetic eval corpus and harness needed to prove it meets the quality bar locked in M0.</p>
 
-<p><strong>Status:</strong> Ready — tooling confirmed (2026-06-05). Per <a href="../../CLAUDE.md">CLAUDE.md</a> this is a design deliverable; no source files are created until &ldquo;build&rdquo; is signalled.</p>
+<p><strong>Status:</strong> In progress — tooling confirmed (2026-06-05); Specs 01–04 merged to <code>main</code> (token engine, T5 guard, unredactor, analyzer wrapper). Remaining: <code>redactor.py</code>, custom recognizers, and the <code>evals/</code> corpus + harness. See <a href="#sequence">Sequencing &amp; progress</a>.</p>
 
 <h2>Goal</h2>
 
@@ -78,36 +78,37 @@
 <h3>Labelling rubric</h3>
 <p>A short written rubric defining what counts as a span boundary per type (e.g. does a name include a title? does a date include the weekday?). Stored alongside the corpus so labels are reproducible and reviewable.</p>
 
-<h2 id="layout">Proposed module layout</h2>
+<h2 id="layout">Module layout (✓ = landed)</h2>
 
 <pre>
 prompt_redact_core/          # the importable library
-  __init__.py
-  analyzer.py                # Presidio AnalyzerEngine wrapper + config (threshold, language, entities)
-  tokens.py                  # [TYPE_N] format; mint next N against a supplied map
-  redactor.py                # redact(): analyze -> assign -> replace R->L
-  unredactor.py              # unredact(): token -> original substitution
-  guards.py                  # T5 token-shaped-substring detection
-  recognizers.py             # custom Presidio recognizers (MRN, member ID, Rx, NPI, DEA)
-  errors.py                  # typed errors (e.g. TokenCollisionError)
+  __init__.py                # ✓
+  analyzer.py                # ✓ Presidio AnalyzerEngine wrapper + config (Spec 04)
+  tokens.py                  # ✓ [TYPE_N] format; mint next N against a supplied map (Spec 01)
+  unredactor.py              # ✓ unredact(): token -> original substitution (Spec 03)
+  guards.py                  # ✓ T5 token-shaped-input detection (Spec 02)
+  errors.py                  # ✓ typed errors
+  redactor.py                #   pending — redact(): analyze -> assign -> replace R->L
+  recognizers.py             #   pending — custom recognizers (MRN, member ID, Rx, NPI, DEA)
 
-requirements.in              # direct deps (presidio-analyzer, spacy, en_core_web_lg, pytest)
-requirements.txt             # compiled + hash-pinned (pip-compile) — supports threat T8
+pyproject.toml               # ✓ pytest config for now; requirements.in/.txt land with the eval-harness spec
 
-evals/
-  corpus/                    # *.jsonl synthetic, span-annotated
-  rubric.md                  # labelling rubric
-  run_eval.py                # metrics + regression gate
+evals/                       #   pending
+  corpus/                    #     *.jsonl synthetic, span-annotated
+  rubric.md                  #     labelling rubric
+  run_eval.py                #     metrics + regression gate
 
 tests/
-  test_redactor.py
-  test_unredactor.py
-  test_map_merge.py
-  test_guards.py
-  test_recognizers.py
-  test_edge_cases.py
+  test_tokens.py             # ✓
+  test_map_merge.py          # ✓
+  test_guards.py             # ✓
+  test_unredactor.py         # ✓
+  test_analyzer.py           # ✓
+  test_redactor.py           #   pending
+  test_recognizers.py        #   pending
+  test_edge_cases.py         #   pending
 </pre>
-<p>Plain <code>pip</code> + <code>venv</code> with a hash-pinned <code>requirements.txt</code> (compiled from <code>requirements.in</code>). No <code>src/</code> layout needed for a single library package at this stage.</p>
+<p>Dependency management is <code>pip</code> + <code>venv</code> with a hash-pinned <code>requirements.txt</code> compiled from <code>requirements.in</code> (supports threat T8) — these land with the eval-harness spec. Until then <code>pyproject.toml</code> holds only pytest config. No <code>src/</code> layout needed for a single library package at this stage.</p>
 
 <h2 id="logic">Core logic details</h2>
 
@@ -151,7 +152,7 @@ tests/
   <thead><tr><th>Choice</th><th>Decision</th><th>Notes</th></tr></thead>
   <tbody>
     <tr><td>Python version</td><td>3.11+</td><td>Matches current Presidio/spaCy support.</td></tr>
-    <tr><td>Dependency manager</td><td><strong>pip + venv</strong></td><td>Hash-pinned <code>requirements.txt</code> compiled from <code>requirements.in</code> (e.g. <code>pip-compile</code>) for reproducibility — supports threat T8.</td></tr>
+    <tr><td>Dependency manager</td><td><strong>pip + venv</strong></td><td>Hash-pinned <code>requirements.txt</code> compiled from <code>requirements.in</code> (e.g. <code>pip-compile</code>) for reproducibility — supports threat T8. These land with the eval-harness spec; <code>pyproject.toml</code> holds pytest config in the interim.</td></tr>
     <tr><td>Test framework</td><td>pytest</td><td>De-facto standard.</td></tr>
     <tr><td>spaCy model</td><td><strong>en_core_web_lg</strong></td><td>Presidio default; CPU-friendly. Escalate to <code>en_core_web_trf</code> only if the recall gate (&ge; 0.99) can't be met with <code>lg</code> + recognizer tuning.</td></tr>
     <tr><td>Engine</td><td>Presidio <em>(locked, M0)</em></td><td>Analyzer + custom anonymization for the token format.</td></tr>
@@ -167,14 +168,18 @@ tests/
 </ul>
 <p>Latency (p95 &le; 50 ms) is validated more meaningfully in M2/M3 under the service; M1 records a baseline.</p>
 
-<h2 id="sequence">Sequencing</h2>
+<h2 id="sequence">Sequencing &amp; progress</h2>
+<p>Actual build order put the pure-logic modules first (each as its own spec/PR), ahead of the corpus/harness the original plan led with. Remaining work is the redactor that ties them together, custom recognizers, then the corpus and gate.</p>
 <ol>
-  <li>Confirm tooling (below).</li>
-  <li>Build the synthetic corpus + labelling rubric (small first slice, expand).</li>
-  <li>Stand up the eval harness against the corpus (red, since no redactor yet).</li>
-  <li>Implement <code>analyzer.py</code> + <code>tokens.py</code> + <code>redactor.py</code>; iterate threshold to green the recall gate.</li>
-  <li>Implement <code>unredactor.py</code> + <code>guards.py</code>.</li>
-  <li>Fill out the test suite; wire the eval harness as a regression gate.</li>
+  <li>✓ Confirm tooling.</li>
+  <li>✓ Token engine + map merge (Spec 01).</li>
+  <li>✓ T5 token-shaped-input guard (Spec 02).</li>
+  <li>✓ Unredactor + round-trip property (Spec 03).</li>
+  <li>✓ Presidio analyzer wrapper (Spec 04).</li>
+  <li><strong>Next:</strong> <code>redactor.py</code> — tie analyzer → token assignment → right-to-left replacement into <code>redact()</code>.</li>
+  <li><strong>Next:</strong> custom recognizers (<code>recognizers.py</code>) for MRN / member ID / Rx / NPI / DEA.</li>
+  <li><strong>Next:</strong> synthetic corpus + labelling rubric (<code>evals/</code>).</li>
+  <li><strong>Next:</strong> eval harness + <code>requirements.in/.txt</code>; iterate the confidence threshold to green the recall gate, wired as a regression gate.</li>
 </ol>
 
 <h2 id="open">Open items</h2>
