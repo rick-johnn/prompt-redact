@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-04: Presidio analyzer wrapper</title>
+</head>
+<body>
+
+<h1>Spec M1-04 — Presidio analyzer wrapper</h1>
+
+<p>Fourth implementation spec for <a href="../plans/m1-redactor-core.html">M1</a>, and the first to depend on Presidio + spaCy. Wraps Presidio's <code>AnalyzerEngine</code> behind a small, configurable surface that returns the analyzer-agnostic <code>Detection</code> objects from <a href="m1-01-token-engine.html">Spec M1-01</a>, so the redactor (Spec M1-06) stays decoupled from Presidio types.</p>
+
+<p>Module: <code>prompt_redact_core/analyzer.py</code>. Maps to the plan's <code>analyzer.py</code> (&ldquo;AnalyzerEngine wrapper + config: threshold, language, entities&rdquo;) and the <code>test_analyzer.py</code> file.</p>
+
+<h2>Goal</h2>
+<p><code>RedactionAnalyzer(config).analyze(text) -&gt; list[Detection]</code>: run Presidio, apply the configured score threshold, resolve overlapping detections deterministically, and return clean, non-overlapping <code>Detection</code>s sorted by offset — ready to feed straight into <code>assign_tokens</code>.</p>
+
+<h2>🔒 Threat-model hardening: no network egress at analyze time</h2>
+<p>Empirically (Presidio 2.2.362), the built-in <strong>email recognizer</strong> calls <code>tldextract.extract(...)</code>, whose default extractor attempts to fetch the public-suffix list from <code>publicsuffix.org</code> on first use. In this environment that returned <code>403 Forbidden</code>; it fell back to the bundled snapshot, so detection still worked — but <strong>a PII redaction service must not make outbound network calls while processing input</strong> (an air-gapped on-prem deploy would see failed fetches, added latency, and an unexpected egress path). Per <a href="../../CLAUDE.md">CLAUDE.md</a>, PII is the threat model and the service stays self-contained.</p>
+<p><strong>Mitigation:</strong> when building the engine, the wrapper pins <code>tldextract</code>'s module-level extractor to an offline instance (<code>TLDExtract(suffix_list_urls=())</code>) — snapshot only, never fetches. The email recognizer does a module-attribute lookup (<code>tldextract.extract</code>) at call time, so the pin takes effect without touching Presidio internals. This is verified by test: after building, the extractor has no suffix-list URLs, and detection still works fully offline.</p>
+
+<h2>Overlap resolution (required)</h2>
+<p>Presidio returns overlapping results: e.g. for <code>john@example.com</code> it emits both <code>EMAIL_ADDRESS [.,.) score=1.00</code> and <code>URL [.,.) score=0.50</code> over the domain. Our right-to-left replacement (<code>apply_replacements</code>) rejects overlaps by design, so the wrapper must pick a non-overlapping subset before handing off.</p>
+<p><strong>Algorithm</strong> (<code>resolve_overlaps</code>, pure / Presidio-free): sort candidates by <em>(score desc, length desc, start asc, entity-type asc)</em> and greedily keep each one that does not overlap an already-kept span. Highest-confidence wins; ties favor the longer span; remaining ties broken deterministically so the output is stable. Touching spans (<code>end == start</code>) are not overlaps and both survive.</p>
+
+<h2>Layering for testability</h2>
+<p>The conversion and overlap logic operate on a tiny internal value object, <code>ScoredSpan(start, end, entity_type, score)</code>, <em>not</em> on Presidio's <code>RecognizerResult</code>. This keeps <code>resolve_overlaps</code> and <code>to_detections</code> pure and fast to unit-test (no model load). <code>analyze()</code> is the only part that touches Presidio: it converts each <code>RecognizerResult</code> to a <code>ScoredSpan</code>, runs the pure pipeline, then converts survivors to <code>Detection</code>s (slicing the originating text).</p>
+<p>Presidio is imported <strong>lazily</strong>, inside engine construction — importing <code>analyzer.py</code> (or the top-level package) does not require the ML stack, preserving the pure-import property of Specs 1–3. The analyzer is intentionally <em>not</em> re-exported from the package <code>__init__</code>; callers import <code>prompt_redact_core.analyzer</code> explicitly.</p>
+
+<h2>Configuration (<code>AnalyzerConfig</code>)</h2>
+<table>
+  <thead><tr><th>Field</th><th>Default</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>language</code></td><td><code>"en"</code></td><td>The per-call language hint (M0: v1 takes a language hint only).</td></tr>
+    <tr><td><code>score_threshold</code></td><td><code>0.0</code></td><td>Minimum Presidio score to keep. <code>0.0</code> == Presidio defaults (M0 decision); tuned against the corpus in Specs 7–8.</td></tr>
+    <tr><td><code>entities</code></td><td><code>None</code></td><td><code>None</code> = all supported entity types; otherwise restrict to the given tuple.</td></tr>
+    <tr><td><code>spacy_model</code></td><td><code>"en_core_web_lg"</code></td><td>The tooling-confirmed model (M1 plan).</td></tr>
+  </tbody>
+</table>
+
+<h2>Public surface (<code>analyzer.py</code>)</h2>
+<ul>
+  <li><code>ScoredSpan</code>, <code>AnalyzerConfig</code> — value objects.</li>
+  <li><code>resolve_overlaps(spans) -&gt; list[ScoredSpan]</code>, <code>to_detections(spans, text) -&gt; list[Detection]</code> — pure helpers.</li>
+  <li><code>RedactionAnalyzer(config=None)</code> with <code>.analyze(text) -&gt; list[Detection]</code>; engine is built lazily on first use.</li>
+</ul>
+
+<h2>Test plan (<code>tests/test_analyzer.py</code>)</h2>
+<p><strong>Pure (no model load):</strong></p>
+<ul>
+  <li><code>AnalyzerConfig</code> defaults.</li>
+  <li><code>resolve_overlaps</code>: no-overlap passthrough (sorted); higher score wins over a lower-score overlapper; equal score &rarr; longer wins; equal score+length &rarr; deterministic tie-break; a 3-span chain; touching spans both kept; empty input.</li>
+  <li><code>to_detections</code>: slices text correctly and sorts by start.</li>
+</ul>
+<p><strong>Integration (Presidio-backed, skipped if model unavailable):</strong></p>
+<ul>
+  <li>Detects <code>PERSON</code>, <code>EMAIL_ADDRESS</code>, <code>PHONE_NUMBER</code> in a synthetic sentence; spans slice back to the expected text.</li>
+  <li>Overlap resolution end-to-end: the email/URL overlap yields the <code>EMAIL_ADDRESS</code>, with no <code>URL</code> span covering the same characters.</li>
+  <li>Empty input &rarr; <code>[]</code>.</li>
+  <li>Threshold filtering: a high <code>score_threshold</code> drops low-score detections but keeps a score-1.0 email.</li>
+  <li><code>entities</code> restriction returns only the requested type.</li>
+  <li>Offline pin: after building, <code>tldextract.extract.suffix_list_urls == ()</code>.</li>
+  <li>Output composes with <code>assign_tokens</code> (the <code>Detection</code> contract holds end-to-end).</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>analyzer.py</code> implemented; Presidio imported lazily; top-level package still imports without the ML stack.</li>
+  <li>Pure helpers at 100% branch coverage; integration tests green against the installed model.</li>
+  <li>Verified no network egress at analyze time (offline tldextract pin).</li>
+  <li>Full suite green.</li>
+</ul>
+
+</body>
+</html>
