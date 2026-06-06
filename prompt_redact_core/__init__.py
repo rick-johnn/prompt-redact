@@ -14,6 +14,7 @@ from .errors import (
     UnknownTokenError,
 )
 from .guards import assert_no_token_shapes, contains_token_shapes
+from .redactor import redact
 from .unredactor import unredact
 from .tokens import (
     TOKEN_RE,
@@ -38,7 +39,8 @@ __all__ = [
     # guards (T5)
     "contains_token_shapes",
     "assert_no_token_shapes",
-    # unredaction
+    # redaction / unredaction
+    "redact",
     "unredact",
     # token engine
     "TOKEN_RE",
