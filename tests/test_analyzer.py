@@ -154,7 +154,10 @@ def test_empty_input_returns_no_detections(analyzer):
 
 
 @pytest.mark.integration
-def test_threshold_filters_low_scores():
+def test_threshold_filters_low_scores(analyzer):
+    # Depends on the `analyzer` fixture only to gate on Presidio + model
+    # availability (it skips if unavailable, like the other integration tests);
+    # this test then builds its own custom-configured analyzer.
     from prompt_redact_core.analyzer import RedactionAnalyzer
 
     strict = RedactionAnalyzer(AnalyzerConfig(score_threshold=0.9))
@@ -166,7 +169,9 @@ def test_threshold_filters_low_scores():
 
 
 @pytest.mark.integration
-def test_entities_restriction():
+def test_entities_restriction(analyzer):
+    # Gated on the `analyzer` fixture for availability (see note above); builds
+    # its own entity-restricted analyzer.
     from prompt_redact_core.analyzer import RedactionAnalyzer
 
     only_email = RedactionAnalyzer(AnalyzerConfig(entities=("EMAIL_ADDRESS",)))
