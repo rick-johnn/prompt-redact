@@ -21,6 +21,8 @@ from .models import (
     validate_example,
 )
 from .generator import generate_corpus
+from .metrics import GATED_TYPES, RECALL_TARGET, Report, score_corpus
+from .run_eval import evaluate
 
 __all__ = [
     "Span",
@@ -32,4 +34,10 @@ __all__ = [
     "load_corpus",
     "dump_corpus",
     "generate_corpus",
+    # harness
+    "Report",
+    "score_corpus",
+    "evaluate",
+    "GATED_TYPES",
+    "RECALL_TARGET",
 ]
