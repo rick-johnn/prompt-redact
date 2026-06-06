@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-05: Custom recognizers</title>
+</head>
+<body>
+
+<h1>Spec M1-05 — Custom recognizers</h1>
+
+<p>Fifth implementation spec for <a href="../plans/m1-redactor-core.html">M1</a> (built after Spec M1-06; the redactor did not depend on it). Adds custom Presidio recognizers for provider identifiers Presidio does not cover out of the box, and registers them with the analyzer (<a href="m1-04-analyzer.html">Spec M1-04</a>).</p>
+
+<p>Module: <code>prompt_redact_core/recognizers.py</code>. Touches <code>analyzer.py</code> (new <code>AnalyzerConfig.custom_recognizers</code> flag + registration). Maps to the plan's <a href="../plans/m1-redactor-core.html#scope">custom-recognizers</a> scope item and the <code>test_recognizers.py</code> test file.</p>
+
+<h2>Scope decision: checksum-validated identifiers only, for now</h2>
+<p>The M0 corpus decision named five domain identifiers: NPI, DEA, MRN, member ID, Rx number. This spec implements only the two with a <strong>self-validating checksum</strong>:</p>
+<ul>
+  <li><strong>NPI</strong> — 10 digits; the 10th is a Luhn check digit over <code>"80840"</code> + the first 9 digits.</li>
+  <li><strong>DEA</strong> — two letters + 7 digits; the 7th digit is a checksum over the first six.</li>
+</ul>
+<p><strong>MRN, member ID, and Rx number are deferred to Specs 07-08</strong> (eval corpus + threshold tuning), on purpose. They have no universal format or checksum, so a recognizer for them is a bare numeric/alphanumeric pattern leaning on context words. At the default confidence threshold (M0 chose Presidio defaults, i.e. <code>0.0</code>) such a pattern fires on <em>every</em> number, which would over-redact catastrophically and tank precision. They can only be calibrated once the corpus exists to measure precision against a tuned threshold — so they ship with that tuning, not before. (Decision 2026-06-05; this keeps the precision bar &ge; 0.90 honest rather than shipping a recognizer we can't yet measure.)</p>
+<p>NPI and DEA already deliver the prescriber/provider slice of the payer/PBM theme, and being checksum-gated they are safe to ship without the threshold being tuned.</p>
+
+<h2>Design</h2>
+<ul>
+  <li><strong>Pure validators.</strong> <code>is_valid_npi(text)</code> and <code>is_valid_dea(text)</code> are plain functions with no Presidio import, so they are fully unit-testable on their own. They are the precision-critical logic.</li>
+  <li><strong>Lazy Presidio wrapping.</strong> <code>build_custom_recognizers()</code> imports Presidio and defines the <code>PatternRecognizer</code> subclasses <em>inside</em> the function. Subclassing at module level would force a top-level Presidio import; keeping it lazy means importing this module (or the package) never needs the ML stack — the same discipline <code>analyzer.py</code> follows.</li>
+  <li><strong>Checksum via <code>validate_result</code>.</strong> Each recognizer overrides Presidio's <code>validate_result</code> hook (the same mechanism the built-in credit-card and SSN recognizers use): a checksum-valid match is confirmed, an invalid one is discarded. So a match survives on the strength of its checksum, independent of the not-yet-tuned threshold. Context words (<code>"npi"</code>, <code>"dea"</code>, …) are supplied for future score enhancement but are not required for a valid checksum to confirm.</li>
+  <li><strong>Registration.</strong> <code>RedactionAnalyzer._build_engine</code> adds the recognizers to the engine registry when <code>config.custom_recognizers</code> is true (default). New entity types: <code>NPI</code>, <code>DEA</code>. They flow through the existing overlap-resolution and <code>Detection</code> conversion unchanged, and compose with the token engine like any other type.</li>
+</ul>
+
+<h2>Known precision note</h2>
+<p>A checksum-valid 10-digit number that is actually something else (≈10% of random 10-digit strings pass the NPI Luhn) would be labelled <code>NPI</code>. The DEA format (2 letters + 7 digits + checksum) is far more specific and rarely collides. Both are revisited when the eval corpus quantifies precision (Specs 07-08); context-weighting or a higher threshold can be applied then if needed.</p>
+
+<h2>Public surface (<code>recognizers.py</code>)</h2>
+<ul>
+  <li><code>is_valid_npi(text) -&gt; bool</code></li>
+  <li><code>is_valid_dea(text) -&gt; bool</code></li>
+  <li><code>build_custom_recognizers() -&gt; list</code> — Presidio <code>PatternRecognizer</code> instances (lazy import).</li>
+</ul>
+
+<h2>Change to <code>analyzer.py</code></h2>
+<ul>
+  <li><code>AnalyzerConfig.custom_recognizers: bool = True</code>.</li>
+  <li><code>_build_engine</code> registers the custom recognizers when the flag is set.</li>
+</ul>
+
+<h2>Test plan (<code>tests/test_recognizers.py</code>)</h2>
+<ul>
+  <li><strong>NPI checksum (pure):</strong> known-valid NPI accepted; wrong check digit, non-10-digit, non-digit, and empty rejected.</li>
+  <li><strong>DEA checksum (pure):</strong> known-valid DEA accepted; wrong checksum, wrong shape (letters/digits count), and empty rejected; case-insensitive letters.</li>
+  <li><strong>Luhn helper:</strong> spot-check the check-digit computation.</li>
+  <li><strong>Integration (real Presidio, skipped if unavailable):</strong> a valid NPI in context is detected as <code>NPI</code>; a checksum-invalid 10-digit number is not; a valid DEA is detected as <code>DEA</code>; disabling <code>custom_recognizers</code> suppresses them.</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>recognizers.py</code> implemented; analyzer registers NPI/DEA by default.</li>
+  <li>Pure validator tests green; full suite green; branch coverage 100% for the pure paths (excluding integration-only paths).</li>
+  <li>No Presidio import at module load in <code>recognizers.py</code>.</li>
+  <li>MRN / member ID / Rx explicitly carried forward to Specs 07-08.</li>
+</ul>
+
+</body>
+</html>

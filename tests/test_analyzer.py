@@ -25,6 +25,7 @@ def test_config_defaults():
     assert c.score_threshold == 0.0
     assert c.entities is None
     assert c.spacy_model == "en_core_web_lg"
+    assert c.custom_recognizers is True
 
 
 def _span(start, end, etype, score):

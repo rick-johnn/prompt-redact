@@ -41,13 +41,15 @@ class AnalyzerConfig:
 
     ``score_threshold == 0.0`` means "Presidio defaults" (the M0 decision); it is
     tuned against the eval corpus in Specs 7-8. ``entities is None`` detects all
-    supported types.
+    supported types. ``custom_recognizers`` registers the checksum-validated
+    provider identifiers (NPI, DEA) from :mod:`prompt_redact_core.recognizers`.
     """
 
     language: str = DEFAULT_LANGUAGE
     score_threshold: float = 0.0
     entities: Optional[tuple[str, ...]] = None
     spacy_model: str = DEFAULT_SPACY_MODEL
+    custom_recognizers: bool = True
 
 
 def _overlaps(a: ScoredSpan, b: ScoredSpan) -> bool:
@@ -140,10 +142,16 @@ class RedactionAnalyzer:
             }
         )
         nlp_engine = provider.create_engine()
-        return AnalyzerEngine(
+        engine = AnalyzerEngine(
             nlp_engine=nlp_engine,
             supported_languages=[self.config.language],
         )
+        if self.config.custom_recognizers:
+            from .recognizers import build_custom_recognizers
+
+            for recognizer in build_custom_recognizers():
+                engine.registry.add_recognizer(recognizer)
+        return engine
 
     def analyze(self, text: str) -> list[Detection]:
         """Detect PII in ``text`` and return clean, non-overlapping ``Detection``s."""
