@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-09: Packaging &amp; dev environment</title>
+</head>
+<body>
+
+<h1>Spec M1-09 — Packaging &amp; dev environment</h1>
+
+<p>Follow-on to <a href="m1-08-eval-harness.html">Spec M1-08</a>. The harness is the first code that actually needs Presidio + the spaCy model at runtime, so this spec adds the dependency declaration that makes <code>python -m evals.run_eval</code> runnable, and records the supply-chain decisions.</p>
+
+<p>Files: <code>requirements.in</code> (new), README &ldquo;Development&rdquo; section, <code>pyproject.toml</code> comment. No source/test changes.</p>
+
+<h2>Decisions</h2>
+<ul>
+  <li><strong><code>requirements.in</code> is the source of truth; <code>requirements.txt</code> is compiled.</strong> The direct deps live in <code>requirements.in</code> (presidio-analyzer, spacy, pytest). The install artifact is <code>requirements.txt</code>, produced with <code>pip-compile --generate-hashes requirements.in</code>. Hash-pinning every transitive dependency is the threat-<a href="../ARCHITECTURE.html#threat-model">T8</a> mitigation.</li>
+  <li><strong><code>requirements.txt</code> is not committed yet.</strong> It must be compiled <em>with hashes on a networked machine</em>; committing a hand-written or hash-less version would defeat T8 and rot immediately. It is committed once it can be generated properly. Until then, <code>pip install -r requirements.in</code> gives a working (un-hash-pinned) dev install.</li>
+  <li><strong>The spaCy model is installed separately by default.</strong> <code>en_core_web_lg</code> is not on PyPI; the documented path is <code>python -m spacy download en_core_web_lg</code>. For a pinned/offline deploy (T8), the model's release wheel can be added to <code>requirements.in</code> and mirrored inside the trust boundary — noted inline in the file, left out of the default to avoid pinning a version that may not match the resolved spaCy.</li>
+  <li><strong>pytest stays in <code>requirements.in</code></strong> for now (per the plan's dep list) rather than a separate dev-requirements; it can be split out later if a leaner runtime image matters.</li>
+</ul>
+
+<h2>Why this isn't verifiable in the design sandbox</h2>
+<p>The sandbox has no network and no Presidio, so neither <code>pip-compile</code> nor a real <code>run_eval</code> can execute here. This spec therefore delivers the <em>declaration</em> and the <em>instructions</em>; compiling the hash-pinned lockfile and the first gate run are the first actions on a dev/CI machine. The pure tests (token engine, guards, corpus, metrics) remain green here regardless.</p>
+
+<h2>Developer workflow (also in the README)</h2>
+<pre>
+python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.in
+python -m spacy download en_core_web_lg
+pytest                       # integration tests auto-skip without the model
+python -m evals.run_eval     # the M1 recall gate
+</pre>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>requirements.in</code> lists the direct deps with the model + hash-pinning instructions inline.</li>
+  <li>README documents venv setup, model install, test run, and the eval gate.</li>
+  <li>Decisions recorded: compiled+hashed <code>requirements.txt</code> (T8), model install path, why the lockfile isn't committed yet.</li>
+</ul>
+
+</body>
+</html>

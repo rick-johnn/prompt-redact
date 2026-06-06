@@ -1,5 +1,6 @@
-# Minimal project config. Packaging proper (requirements.in/.txt) lands with the
-# eval-harness spec; for now this only configures pytest.
+# Minimal project config: pytest only. Dependencies live in requirements.in
+# (Spec M1-09); the hash-pinned requirements.txt is compiled from it (see
+# docs/specs/m1-09-packaging.html and the README "Development" section).
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
