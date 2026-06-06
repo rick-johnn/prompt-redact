@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-07: Eval corpus</title>
+</head>
+<body>
+
+<h1>Spec M1-07 — Eval corpus</h1>
+
+<p>Seventh implementation spec for <a href="../plans/m1-redactor-core.html">M1</a>. Builds the synthetic, span-annotated corpus the redactor is measured against — the prerequisite for the M1 exit gate (recall &ge; 0.99). The harness that scores against it is <a href="m1-04-analyzer.html">the next spec</a> (M1-08).</p>
+
+<p>Package: <code>evals/</code> — <code>models.py</code> (data model + JSONL IO + validation), <code>generator.py</code> (deterministic generation), <code>corpus/sample.jsonl</code> (a committed sample). Tests: <code>tests/test_eval_corpus.py</code>. No Presidio: the corpus is pure data.</p>
+
+<h2>Key decision: generate, don't hand-author</h2>
+<p>The corpus is <strong>generated deterministically from code</strong>, not hand-written or pulled from a third-party dataset. Why:</p>
+<ul>
+  <li><strong>Volume &amp; balance.</strong> Measuring per-entity recall needs many spans per type; a generator produces them on demand with controllable balance.</li>
+  <li><strong>No third-party data, no network, no new dependency.</strong> Matches the project's on-prem / supply-chain posture (threat T8). A stdlib-only seeded generator beats pulling in a faker dependency or a public PHI set with its own data-use review.</li>
+  <li><strong>Reproducible &amp; auditable.</strong> A given <code>seed</code> always yields the same corpus, so results are reproducible and the data is regenerable from source rather than an opaque blob.</li>
+  <li><strong>Synthetic only.</strong> No real PHI/PII ever enters the repo (CLAUDE.md).</li>
+</ul>
+<p>A small sample is committed (<code>evals/corpus/sample.jsonl</code>) for inspection and a load test; the harness regenerates at whatever size it needs.</p>
+
+<h2>Data model (<code>models.py</code>)</h2>
+<pre>
+Example: { id, domain, text, spans: [Span, ...] }
+Span:    { start, end, entity_type, value }   # text[start:end] == value
+</pre>
+<p>JSONL on disk (one object per line); spans use <strong>character offsets</strong> so the harness scores by offset, not surface form. <code>validate_example</code> enforces the invariants: each span in-bounds and <code>start &lt; end</code>, the slice equals <code>value</code>, a non-empty type, and no two spans overlap.</p>
+
+<h2>Generation (<code>generator.py</code>)</h2>
+<ul>
+  <li><strong>Offsets correct by construction.</strong> Text is assembled from <code>(chunk, type)</code> parts by <code>_assemble</code>, which tracks the running position and emits a span per typed chunk — a span can never drift from its value.</li>
+  <li><strong>Checksum identifiers minted valid.</strong> NPI (Luhn over <code>"80840"</code> + 9), DEA (checksum 7th digit), and credit cards (Visa-style, Luhn-valid) are generated using the same algorithms the recognizers validate, so they are actually detectable. The tests cross-check this against the real <code>is_valid_npi</code> / <code>is_valid_dea</code>.</li>
+  <li><strong>Presidio-canonical type names</strong> for built-ins (<code>PERSON</code>, <code>EMAIL_ADDRESS</code>, <code>PHONE_NUMBER</code>, <code>US_SSN</code>, <code>CREDIT_CARD</code>, <code>DATE_TIME</code>, <code>LOCATION</code>) plus the custom <code>NPI</code>, <code>DEA</code>, <code>MRN</code>, <code>MEMBER_ID</code>, <code>RX_NUMBER</code>, so the harness compares predictions to gold by type.</li>
+  <li><strong>Domains:</strong> healthcare, finance, pbm, generic — plus a no-PII template (an example with zero spans) so the harness can verify the redactor leaves clean text alone.</li>
+</ul>
+
+<h2>Labelling rubric</h2>
+<p>The rules the generated spans follow (and that any future hand-added example must match), kept here rather than a separate <code>evals/rubric.md</code> to honour the docs-are-HTML convention:</p>
+<ul>
+  <li><strong>Span = the identifier only.</strong> Labels/prefixes ("MRN ", "DOB ") are never inside the span; the span is exactly the value a reader would treat as the identifier.</li>
+  <li><strong>PERSON</strong> = given + family name, no titles or honorifics.</li>
+  <li><strong>DATE_TIME</strong> = the date token as written (e.g. <code>MM/DD/YYYY</code>); surrounding words excluded.</li>
+  <li><strong>Numbers carry no separators beyond their canonical form</strong> — SSN as <code>ddd-dd-dddd</code>, phone as <code>(ddd) ddd-dddd</code>, card as 16 contiguous digits.</li>
+  <li><strong>One span per occurrence.</strong> A value appearing twice in one text is two spans.</li>
+  <li><strong>No overlaps.</strong> If two types could claim the same characters, the corpus picks one (the harness and redactor both assume non-overlapping gold).</li>
+  <li><strong>Offsets are characters</strong>, not bytes or tokens; Unicode values are allowed and counted by code point.</li>
+</ul>
+
+<h2>On the leakage metric (note for M1-08)</h2>
+<p>The M0 bar includes end-to-end leakage &le; 1 in 10,000, which only becomes statistically meaningful at tens of thousands of inputs. The generator can produce that volume (raise <code>n_per_template</code>), but whether M1 <em>gates</em> on leakage at that N or reports it while gating on per-entity recall is a harness decision, deferred to <a href="../plans/m1-redactor-core.html">Spec M1-08</a>.</p>
+
+<h2>Public surface (<code>evals/</code>)</h2>
+<ul>
+  <li><code>generate_corpus(seed=0, n_per_template=20) -&gt; list[Example]</code></li>
+  <li><code>Span</code>, <code>Example</code>, <code>validate_example</code>, <code>CorpusValidationError</code></li>
+  <li><code>dumps_jsonl</code> / <code>loads_jsonl</code> / <code>dump_corpus</code> / <code>load_corpus</code></li>
+</ul>
+
+<h2>Test plan (<code>tests/test_eval_corpus.py</code>)</h2>
+<ul>
+  <li><strong>Determinism:</strong> same seed → identical corpus; different seed → different texts.</li>
+  <li><strong>Offsets:</strong> every example passes <code>validate_example</code>; every span slices to its value.</li>
+  <li><strong>Checksums:</strong> all NPI/DEA spans pass the real validators; all cards are 16-digit Visa-style and Luhn-valid.</li>
+  <li><strong>Coverage:</strong> all expected entity types and domains present; a no-PII example exists; ids unique.</li>
+  <li><strong>JSONL:</strong> round-trips; blank lines skipped.</li>
+  <li><strong>Validation:</strong> rejects wrong value, out-of-bounds, overlap, empty type.</li>
+  <li><strong>Committed sample</strong> loads and validates.</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>evals/</code> package + committed sample; generation deterministic and offset-exact.</li>
+  <li><code>test_eval_corpus.py</code> green; full suite green; no Presidio import in <code>evals/</code>.</li>
+  <li>MRN / member ID / Rx are in the corpus as gold even though their recognizers are deferred — so M1-08 can measure them and tune those recognizers in.</li>
+</ul>
+
+</body>
+</html>
