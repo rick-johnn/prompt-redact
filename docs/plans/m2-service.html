@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — M2 Plan: Redaction service MVP</title>
+</head>
+<body>
+
+<h1>M2 Plan — Redaction service MVP</h1>
+
+<p>Detailed plan for the <a href="../PLAN.html">M2</a> milestone: wrap the M1 redactor core (<code>prompt_redact_core</code>) in a runnable HTTP service exposing the <a href="../ARCHITECTURE.html#api-surface">API surface</a> — <code>POST /redact</code>, <code>POST /unredact</code>, <code>GET /healthz</code>.</p>
+
+<p><strong>Status:</strong> Draft / sketch — several decisions deferred to M2 are now due and are called out under <a href="#decisions">Decisions to make</a>. No service code is written until they're settled and &ldquo;build&rdquo; is signalled.</p>
+
+<h2>Topology (from <a href="../decisions/0001-language-and-topology.html">ADR 0001</a>)</h2>
+<p>The accepted shape is a <strong>sidecar</strong>: a fast front-end (Go or TypeScript) owns the public HTTP API and calls a <strong>Python sidecar</strong> — which wraps <code>prompt_redact_core</code> — over a loopback-only IPC boundary (threat <a href="../ARCHITECTURE.html#threat-model">T11</a>).</p>
+<pre>
+   client ──HTTP──▶ ┌────────────────────┐  loopback   ┌────────────────────────┐
+                    │ front-end (Go/TS)  │ ──IPC──────▶ │ Python sidecar         │
+                    │ - API, size cap,   │             │ - prompt_redact_core   │
+                    │   error mapping    │ ◀────────── │ - Presidio analyzer    │
+                    └────────────────────┘             │   (built once, eager)  │
+                                                        └────────────────────────┘
+                         one host / one pod; IPC never leaves the host
+</pre>
+
+<h2>Goal</h2>
+<p>A <code>docker compose up</code>-able service where a synthetic caller can round-trip a multi-turn conversation through <code>/redact</code> + <code>/unredact</code> with stable cross-turn tokens, and structured logs contain no raw identifiers.</p>
+
+<h2>Scope</h2>
+<h3>In scope</h3>
+<ul>
+  <li>Python sidecar: a thin web app exposing redact/unredact/health over loopback, building the analyzer <strong>eagerly at startup</strong> (the analyzer's own note: lazy first-build isn't synchronized, so the service must warm it before serving concurrency).</li>
+  <li>Front-end: the public HTTP API, request size cap (<a href="../ARCHITECTURE.html#threat-model">T9</a>), error mapping, and the IPC client.</li>
+  <li><code>GET /healthz</code> readiness — returns ok only once the model is loaded.</li>
+  <li>Structured logging with <strong>no request/response bodies</strong> by default (T2/T3).</li>
+  <li>Integration test: a multi-turn conversation through both endpoints asserting cross-turn token stability and round-trip fidelity.</li>
+</ul>
+<h3>Out of scope (later milestones)</h3>
+<ul>
+  <li>Dockerfile / docker-compose / k8s manifests — packaged in <a href="../PLAN.html">M4</a> (compose may be pulled forward for the integration test; TBD below).</li>
+  <li>Auth, rate limiting, multi-tenant concerns — surrounding infra (ADR 0002 non-goals).</li>
+  <li>Per-call entity config beyond the <code>language</code> hint (M0 decision).</li>
+  <li>The deferred MRN/member-ID/Rx recognizers and their tuning (M1 follow-up).</li>
+</ul>
+
+<h2 id="decisions">Decisions to make (deferred to M2 — now due)</h2>
+<ol>
+  <li><strong>Sequencing: Python-service-first, or full sidecar at once?</strong> The Python sidecar is needed regardless and, if it speaks HTTP, <em>is itself</em> a working redaction service. Recommended: ship the <strong>Python service as the M2 MVP</strong> (proves the API + round-trip), then add the Go/TS front-end as a follow-up. This de-risks M2 and matches ADR 0001's own &ldquo;honest take&rdquo; that the front-end shell is not the bottleneck. The alternative is building both for M2.</li>
+  <li><strong>Front-end language: Go vs TypeScript.</strong> The pick ADR 0001 deferred (it nominally said &ldquo;at M1 start,&rdquo; but M1 was pure Python). Needed once we build the front-end. Drivers: team familiarity, the surrounding stack, on-call ergonomics.</li>
+  <li><strong>IPC protocol: HTTP-over-loopback vs gRPC.</strong> HTTP is simplest and reuses the same JSON contract; gRPC adds a schema + codegen but is faster and strongly typed. For loopback chat-rate traffic, HTTP is likely enough. Must stay loopback-only (T11).</li>
+  <li><strong>Python web framework.</strong> FastAPI vs Starlette vs Litestar (ADR 0001's Option-A candidates). FastAPI gives request validation + OpenAPI cheaply.</li>
+  <li><strong>Token-map wire contract</strong> (deferred from M0). The in-memory shape is a flat <code>{token: original}</code> dict. Decide the JSON wire shape now: flat dict, or a versioned envelope (<code>{"version":1, "map":{…}}</code>) for future-proofing. Callers persist it, so it's a contract to honor or version.</li>
+  <li><strong><code>/unredact</code> on an unknown token.</strong> <a href="../ARCHITECTURE.html#api-surface">ARCHITECTURE</a> currently says &ldquo;leave it as-is,&rdquo; but the M1 core (<a href="../specs/m1-03-unredactor.html">Spec M1-03</a>) <em>raises</em> <code>UnknownTokenError</code> (strict, all-or-nothing). These conflict. Decide: service maps the error to a 4xx (honor strict core), or the core/ARCHITECTURE change to lenient. Recommended: keep the strict core, map to <code>409/422</code>, and update ARCHITECTURE.</li>
+</ol>
+
+<h2>Components</h2>
+<h3>Python sidecar</h3>
+<ul>
+  <li>Builds one <code>RedactionAnalyzer</code> at startup; <code>/healthz</code> flips ready after warmup.</li>
+  <li><code>redact</code>: calls <code>prompt_redact_core.redact(text, token_map, analyzer=…)</code>; maps <code>TokenShapedInputError</code>/<code>RedactError</code> to 400.</li>
+  <li><code>unredact</code>: calls <code>prompt_redact_core.unredact</code>; maps <code>UnknownTokenError</code> per decision #6.</li>
+</ul>
+<h3>Front-end (Go/TS)</h3>
+<ul>
+  <li>Public API, request size cap → <code>413</code> (T9), JSON (de)serialization, IPC client to the sidecar, error passthrough/mapping, structured logging without bodies.</li>
+</ul>
+
+<h2>API surface</h2>
+<p>Exactly as in <a href="../ARCHITECTURE.html#api-surface">ARCHITECTURE — API surface</a>. Error mapping: malformed body or token-shaped input → <code>400</code>; body over the cap → <code>413</code>; unknown-token on unredact → per decision #6; engine failure → <code>500</code>.</p>
+
+<h2>Threats addressed</h2>
+<ul>
+  <li><strong>T2/T3</strong> — no request/response bodies in logs; crash handlers scrub.</li>
+  <li><strong>T9</strong> — configurable request-size cap at the front-end.</li>
+  <li><strong>T11</strong> — IPC bound to loopback; mTLS only if ever split across hosts.</li>
+  <li><strong>T4</strong> — documented boundary: the service can't force callers to use it.</li>
+</ul>
+
+<h2>Exit criteria (from <a href="../PLAN.html">PLAN</a>)</h2>
+<ul>
+  <li><code>curl</code> round-trips text through <code>/redact</code> and <code>/unredact</code> with stable tokens across calls.</li>
+  <li>Structured logs contain no raw identifiers.</li>
+  <li>Integration test: multi-turn conversation asserts cross-turn token stability + round-trip fidelity.</li>
+</ul>
+
+<h2>Proposed spec breakdown (once decisions land)</h2>
+<ol>
+  <li>M2-01 — Python sidecar app + eager analyzer + <code>/healthz</code>.</li>
+  <li>M2-02 — <code>/redact</code> + <code>/unredact</code> handlers + error mapping + the wire contract.</li>
+  <li>M2-03 — request size cap + logging discipline.</li>
+  <li>M2-04 — multi-turn integration test (+ compose if pulled forward).</li>
+  <li>M2-05 — Go/TS front-end + IPC client (if not shipped as the MVP interim).</li>
+</ol>
+
+</body>
+</html>
