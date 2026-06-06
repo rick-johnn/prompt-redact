@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-08: Eval harness</title>
+</head>
+<body>
+
+<h1>Spec M1-08 — Eval harness</h1>
+
+<p>Eighth and final implementation spec for <a href="../plans/m1-redactor-core.html">M1</a>. Scores the analyzer's detection against the gold corpus (<a href="m1-07-eval-corpus.html">Spec M1-07</a>) and acts as the regression gate that defines M1's exit.</p>
+
+<p>Package: <code>evals/</code> — <code>metrics.py</code> (pure scoring), <code>run_eval.py</code> (CLI + gate). Tests: <code>tests/test_eval_harness.py</code>. Scoring and the eval loop are pure (analyzer injected); only the real run needs Presidio.</p>
+
+<h2>What it measures</h2>
+<ul>
+  <li><strong>Per-entity recall</strong> (bucketed by gold type) and <strong>per-entity precision</strong> (bucketed by predicted type).</li>
+  <li><strong>Leakage rate</strong> — fraction of examples where any gold span was not caught.</li>
+  <li>Matching is <strong>exact character offset</strong>: a partial match (caught "Doe", not "John Doe") is a miss, because the visible remainder leaks. Recall is type-agnostic for <em>catching</em> — what matters is that the characters were redacted, whatever the detector labelled them; precision is bucketed by the predicted label.</li>
+  <li>Recall is measured on the analyzer's detections, which is exactly what the redactor redacts (it splices a token over every detected span) — so detection recall is redaction recall, and the harness needn't re-run replacement.</li>
+</ul>
+
+<h2>Resolved decisions (2026-06-05)</h2>
+<ul>
+  <li><strong>Gate scope: implemented recognizer types only.</strong> Recall &ge; 0.99 gates <code>PERSON, EMAIL_ADDRESS, PHONE_NUMBER, US_SSN, CREDIT_CARD, DATE_TIME, LOCATION, NPI, DEA</code>. <code>MRN, MEMBER_ID, RX_NUMBER</code> are <em>reported but not gated</em> — their recognizers are deferred (<a href="m1-05-recognizers.html">Spec M1-05</a>); gating them would fail by construction. They appear in the report marked <code>report</code> so the gap is visible, and the corpus already carries them as gold so they can be gated once their recognizers land and are tuned.</li>
+  <li><strong>Leakage: reported, not gated.</strong> The M0 leakage bar (&le; 1/10,000) is only statistically meaningful at tens of thousands of inputs; M1 gates on per-entity recall (the plan's stated exit) and prints leakage at the run's corpus size as informational. Strict leakage-gating at scale is a later step.</li>
+  <li><strong>Analyzer injected.</strong> <code>evaluate(corpus, analyzer)</code> takes any object with <code>analyze(text)</code>, so the entire harness loop is unit-testable with a fake analyzer; only <code>main</code> constructs the real <code>RedactionAnalyzer</code>.</li>
+</ul>
+
+<h2>Gate &amp; exit code</h2>
+<p><code>python -m evals.run_eval [n_per_template] [seed]</code> generates the corpus, runs the analyzer, prints the report, and exits non-zero if any gated type is below target — so it drops straight into CI. <code>Report.passed()</code> encodes the gate; <code>Report.gate_failures()</code> lists the offenders.</p>
+
+<h2>Public surface (<code>evals/</code>)</h2>
+<ul>
+  <li><code>score_corpus(pairs) -&gt; Report</code> — pure aggregation over <code>(gold, predicted)</code> span pairs.</li>
+  <li><code>evaluate(corpus, analyzer) -&gt; Report</code> — runs the analyzer over the corpus and scores.</li>
+  <li><code>Report</code> — <code>recall()</code>, <code>precision()</code>, <code>leakage_rate</code>, <code>gate_failures()</code>, <code>passed()</code>, <code>format()</code>.</li>
+  <li><code>RECALL_TARGET</code>, <code>GATED_TYPES</code>.</li>
+</ul>
+
+<h2>Test plan (<code>tests/test_eval_harness.py</code>)</h2>
+<ul>
+  <li><strong>Scoring:</strong> perfect detection; a missed span (recall miss + leak); a false positive (precision miss, no leak); partial-offset = miss; type-agnostic catching; no-gold example never leaks; empty corpus.</li>
+  <li><strong>Gate:</strong> a gated type below 0.99 fails; an ungated type (MRN) below target does not; a gated type at target passes; report formats.</li>
+  <li><strong>evaluate():</strong> with a fake analyzer — perfect detection passes; a blind analyzer fails.</li>
+  <li><strong>Integration (real Presidio, skipped if unavailable):</strong> the harness runs end-to-end over the generated corpus and returns a populated report.</li>
+</ul>
+
+<h2>M1 exit status</h2>
+<p>This spec completes the M1 <em>machinery</em>: redactor + recognizers + corpus + a gating harness, all unit-green. <strong>M1 formally exits only when <code>run_eval</code> is executed in a Presidio-enabled environment and the recall gate passes</strong> (and the threshold is tuned if any gated type falls short). That run can't happen in the design sandbox (no Presidio), so it is the first action on a dev/CI machine. Until then, recall numbers are unverified and the gate result is pending.</p>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>metrics.py</code> + <code>run_eval.py</code> implemented; scoring and the eval loop unit-tested without Presidio.</li>
+  <li><code>test_eval_harness.py</code> green; full suite green; no Presidio import at module load in <code>evals/</code>.</li>
+  <li>Gate scope and leakage handling match the recorded decisions; MRN/member/Rx reported, not gated.</li>
+</ul>
+
+</body>
+</html>
