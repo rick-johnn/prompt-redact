@@ -240,7 +240,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
 }
 </pre>
 
-<p>Behavior on a token in the text that isn't in the map: left as-is. Callers may treat that as a warning signal that an unknown token leaked through.</p>
+<p>Behavior on a token in the text that isn't in the map: <strong>strict</strong> — the redactor core raises <code>UnknownTokenError</code> and the service returns <code>422</code>, substituting nothing (all-or-nothing). An unknown token means the text and map are out of sync (a corrupted or mismatched map), which a redaction tool should surface loudly rather than silently pass through. <em>(Updated 2026-06-06; supersedes the earlier &ldquo;left as-is&rdquo; behavior — see <a href="specs/m1-03-unredactor.html">Spec M1-03</a> and the <a href="plans/m2-service.html">M2 plan</a>.)</em></p>
 
 <h3><code>GET /healthz</code></h3>
 <p>Returns <code>{"status": "ok"}</code> once the analyzer model is loaded.</p>
