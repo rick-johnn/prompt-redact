@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — M2 Plan: Redaction service MVP</title>
+</head>
+<body>
+
+<h1>M2 Plan — Redaction service MVP</h1>
+
+<p>Detailed plan for the <a href="../PLAN.html">M2</a> milestone: wrap the M1 redactor core (<code>prompt_redact_core</code>) in a runnable HTTP service exposing the <a href="../ARCHITECTURE.html#api-surface">API surface</a> — <code>POST /redact</code>, <code>POST /unredact</code>, <code>GET /healthz</code>.</p>
+
+<p><strong>Status:</strong> Decisions resolved (2026-06-06) for the MVP path — see <a href="#decisions">Decisions</a>. M2 ships the <strong>Python service as the MVP</strong> (FastAPI); the Go/TS front-end and IPC protocol are deferred to a later front-end spec. No service code is written until &ldquo;build&rdquo; is signalled.</p>
+
+<h2>Topology (from <a href="../decisions/0001-language-and-topology.html">ADR 0001</a>)</h2>
+<p>The accepted shape is a <strong>sidecar</strong>: a fast front-end (Go or TypeScript) owns the public HTTP API and calls a <strong>Python sidecar</strong> — which wraps <code>prompt_redact_core</code> — over a loopback-only IPC boundary (threat <a href="../ARCHITECTURE.html#threat-model">T11</a>).</p>
+<pre>
+   client ──HTTP──▶ ┌────────────────────┐  loopback   ┌────────────────────────┐
+                    │ front-end (Go/TS)  │ ──IPC──────▶ │ Python sidecar         │
+                    │ - API, size cap,   │             │ - prompt_redact_core   │
+                    │   error mapping    │ ◀────────── │ - Presidio analyzer    │
+                    └────────────────────┘             │   (built once, eager)  │
+                                                        └────────────────────────┘
+                         one host / one pod; IPC never leaves the host
+</pre>
+<p><strong>MVP scope (decided 2026-06-06):</strong> M2 ships the <strong>Python service alone</strong> — it is a complete redaction service on its own. The Go/TS front-end and the loopback IPC are added in a later spec (the public API and the sidecar's API are the same contract, so the front-end is a thin pass-through). This is why the Go-vs-TS and IPC-protocol picks stay deferred.</p>
+
+<h2>Goal</h2>
+<p>A <code>docker compose up</code>-able service where a synthetic caller can round-trip a multi-turn conversation through <code>/redact</code> + <code>/unredact</code> with stable cross-turn tokens, and structured logs contain no raw identifiers.</p>
+
+<h2>Scope</h2>
+<h3>In scope</h3>
+<ul>
+  <li>Python FastAPI service exposing <code>/redact</code>, <code>/unredact</code>, <code>/healthz</code>, building the analyzer <strong>eagerly at startup</strong> (the analyzer's own note: lazy first-build isn't synchronized, so the service must warm it before serving concurrency).</li>
+  <li>Request size cap (<a href="../ARCHITECTURE.html#threat-model">T9</a>) and error mapping in the service.</li>
+  <li>The Go/TS front-end + loopback IPC are <strong>deferred to a later spec (M2-05)</strong> — the Python service is the MVP.</li>
+  <li><code>GET /healthz</code> readiness — returns ok only once the model is loaded.</li>
+  <li>Structured logging with <strong>no request/response bodies</strong> by default (T2/T3).</li>
+  <li>Integration test: a multi-turn conversation through both endpoints asserting cross-turn token stability and round-trip fidelity.</li>
+</ul>
+<h3>Out of scope (later milestones)</h3>
+<ul>
+  <li>Dockerfile / docker-compose / k8s manifests — packaged in <a href="../PLAN.html">M4</a> (compose may be pulled forward for the integration test; TBD below).</li>
+  <li>Auth, rate limiting, multi-tenant concerns — surrounding infra (ADR 0002 non-goals).</li>
+  <li>Per-call entity config beyond the <code>language</code> hint (M0 decision).</li>
+  <li>The deferred MRN/member-ID/Rx recognizers and their tuning (M1 follow-up).</li>
+</ul>
+
+<h2 id="decisions">Decisions (resolved 2026-06-06)</h2>
+<ol>
+  <li><strong>Sequencing — Python service first (MVP).</strong> The Python service speaking HTTP is a complete redaction service; M2 ships it as the MVP and adds the Go/TS front-end later. This defers decisions #2 and #3.</li>
+  <li><strong>Front-end language (Go vs TypeScript) — DEFERRED</strong> to the front-end spec (M2-05); not needed for the Python MVP.</li>
+  <li><strong>IPC protocol (HTTP vs gRPC) — DEFERRED</strong> to the front-end spec; not needed until there are two processes.</li>
+  <li><strong>Python web framework — FastAPI.</strong> Request validation + OpenAPI out of the box; rejects malformed bodies early (good for a PII API). Adds <code>pydantic</code> + <code>starlette</code> + <code>uvicorn</code> to the deps.</li>
+  <li><strong>Token-map wire contract — flat dict, documented v1.</strong> The wire shape is the in-memory shape, <code>{token: original}</code>, documented as v1. Versioning is added only if a breaking change is ever needed.</li>
+  <li><strong><code>/unredact</code> unknown token — strict, mapped to <code>422</code>.</strong> Keep the M1 core's strict behavior (raises <code>UnknownTokenError</code>); the service returns <code>422</code>. An unknown token signals a corrupted/mismatched map and is surfaced loudly. <a href="../ARCHITECTURE.html#api-surface">ARCHITECTURE</a> is updated to match (its prior &ldquo;leave as-is&rdquo; wording is superseded).</li>
+</ol>
+
+<h2>Components</h2>
+<h3>Python service (FastAPI) — the M2 MVP</h3>
+<ul>
+  <li>Builds one <code>RedactionAnalyzer</code> at startup; <code>/healthz</code> flips ready after warmup.</li>
+  <li><code>redact</code>: calls <code>prompt_redact_core.redact(text, token_map, analyzer=…)</code>; maps <code>TokenShapedInputError</code>/<code>RedactError</code> to <code>400</code>.</li>
+  <li><code>unredact</code>: calls <code>prompt_redact_core.unredact</code>; maps <code>UnknownTokenError</code> to <code>422</code>.</li>
+  <li>Request size cap → <code>413</code> (T9); structured logging without bodies (T2/T3).</li>
+</ul>
+<h3>Front-end (Go/TS) — deferred</h3>
+<ul>
+  <li>Added in a later spec (M2-05): the fast public shell + loopback IPC client. Because the front-end and the sidecar share the same API contract, it is a thin pass-through. Needs decisions #2 (Go vs TS) and #3 (IPC) first.</li>
+</ul>
+
+<h2>API surface</h2>
+<p>Exactly as in <a href="../ARCHITECTURE.html#api-surface">ARCHITECTURE — API surface</a>. Error mapping: malformed body or token-shaped input → <code>400</code>; body over the cap → <code>413</code>; unknown-token on unredact → <code>422</code>; engine failure → <code>500</code>.</p>
+
+<h2>Threats addressed</h2>
+<ul>
+  <li><strong>T2/T3</strong> — no request/response bodies in logs; crash handlers scrub.</li>
+  <li><strong>T9</strong> — configurable request-size cap at the front-end.</li>
+  <li><strong>T11</strong> — IPC bound to loopback; mTLS only if ever split across hosts.</li>
+  <li><strong>T4</strong> — documented boundary: the service can't force callers to use it.</li>
+</ul>
+
+<h2>Exit criteria (from <a href="../PLAN.html">PLAN</a>)</h2>
+<ul>
+  <li><code>curl</code> round-trips text through <code>/redact</code> and <code>/unredact</code> with stable tokens across calls.</li>
+  <li>Structured logs contain no raw identifiers.</li>
+  <li>Integration test: multi-turn conversation asserts cross-turn token stability + round-trip fidelity.</li>
+</ul>
+
+<h2>Spec breakdown</h2>
+<ol>
+  <li><strong>M2-01</strong> — FastAPI app skeleton + eager analyzer build + <code>/healthz</code> readiness; add FastAPI/uvicorn to <code>requirements.in</code>.</li>
+  <li><strong>M2-02</strong> — <code>/redact</code> + <code>/unredact</code> handlers, flat-v1 wire contract, error mapping (<code>400</code> / <code>422</code> / <code>500</code>).</li>
+  <li><strong>M2-03</strong> — request size cap (<code>413</code>, T9) + logging discipline (no bodies, T2/T3).</li>
+  <li><strong>M2-04</strong> — multi-turn integration test (cross-turn token stability + round-trip); compose may be pulled forward to run it.</li>
+  <li><strong>M2-05</strong> (later) — Go/TS front-end + loopback IPC; requires decisions #2 and #3.</li>
+</ol>
+
+</body>
+</html>
