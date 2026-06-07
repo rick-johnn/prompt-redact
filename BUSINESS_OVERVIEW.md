@@ -127,12 +127,12 @@ We are working in clear stages, each with a finish line we can point to:
 | Stage | What gets done | "Done" looks like |
 |---|---|---|
 | **M0 — Design ✓ (done)** | Lock the big decisions, write the plans | Decisions signed off, key questions answered |
-| **M1 — The core engine (now)** | Build the part that finds and hides sensitive text | It correctly hides test data at our target catch rate |
-| **M2 — The service** | Wrap the engine so other apps can call it | A live service cleans and restores text reliably |
+| **M1 — The core engine ✓ (done)** | Build the part that finds and hides sensitive text | It hides the test data at our target catch rates |
+| **M2 — The service (now)** | Wrap the engine so other apps can call it | A live service cleans and restores text reliably |
 | **M3 — Speed tuning** | Make it faster *if* testing shows we need to | Measurably faster, same accuracy |
 | **M4 — Packaging** | Bundle it so adopters can install and run it | It starts up cleanly with one command |
 
-**M0 (Design) is complete** as of 2026-06-05 — the big decisions are settled: the build approach (a fast front-end plus a Python detection engine), the quality bar above, and the primary deployment shape (a shared service inside the adopter's own environment). We are now starting **M1**: building the core engine and the test dataset used to prove it meets the bar.
+**M0 (Design) and M1 (the core engine) are complete.** The engine finds and hides sensitive text, and an automated quality check confirms it meets the per-type catch-rate bar (using the heavier AI model described above). We're now in **M2**: wrapping that engine in a live service other apps can call — the request/response API, safety limits, and a multi-turn conversation test are already working.
 
 > **Explain it simply:** We're building this in steps, like levels in a video game, and each level has a clear way to know you beat it. Right now we're on Level 0: drawing up the blueprints and getting everyone to agree before we start hammering nails. Levels 1 through 4 are: build the marker, turn it into a tool others can use, make it fast, and box it up so customers can install it. We're not allowed to leave Level 0 until a couple of big choices get the green light.
 
