@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M2-04: Multi-turn conversation test</title>
+</head>
+<body>
+
+<h1>Spec M2-04 — Multi-turn conversation test</h1>
+
+<p>Fourth M2 spec (<a href="../plans/m2-service.html">plan</a>) and the <strong>M2 exit criterion</strong>: a synthetic caller drives a multi-turn conversation through the service, round-tripping the token map exactly as a real chat app would, asserting cross-turn token stability and round-trip fidelity.</p>
+
+<p>Test: <code>tests/test_service_conversation.py</code>. No app changes — this verifies the contract built in M2-01…03.</p>
+
+<h2>What it proves</h2>
+<ul>
+  <li><strong>Cross-turn token stability.</strong> The caller carries the token map out of each <code>/redact</code> response and back into the next <code>/redact</code> request; the same identifier (e.g. &ldquo;John Doe&rdquo;) keeps the same token (<code>[PERSON_1]</code>) across turns. This is the property that makes a redacted conversation coherent to a downstream LLM.</li>
+  <li><strong>Fresh tokens for new identifiers.</strong> A new entity in turn 2 (&ldquo;Jane Roe&rdquo;) mints the next free token (<code>[PERSON_2]</code>) without colliding.</li>
+  <li><strong>Round-trip fidelity.</strong> An LLM-style reply full of tokens is restored by <code>/unredact</code> using the accumulated map.</li>
+</ul>
+
+<h2>Approach</h2>
+<ul>
+  <li><strong>In-sandbox (no Presidio):</strong> a <code>ScriptedAnalyzer</code> returns deterministic detections (verified offsets) for each turn's text, so the test exercises the full service path — request validation, the flat-v1 wire contract, map merge across turns, replacement, and unredaction — and asserts exact redacted strings and maps. This proves the <em>service contract</em> end-to-end without the ML stack.</li>
+  <li><strong>Presidio-backed variant (<code>@pytest.mark.integration</code>, skipped if unavailable):</strong> runs the real analyzer over a two-turn conversation and asserts the person's token is stable across turns and the second turn round-trips — without asserting exact offsets (which depend on the model).</li>
+</ul>
+
+<h2>Why TestClient, not docker-compose</h2>
+<p>The plan floated pulling compose forward to run this. It isn't needed: <code>TestClient</code> drives the real ASGI app in-process, which exercises the same request → redact → response → unredact contract. Compose / the <code>curl</code> smoke check belong with packaging in <a href="../PLAN.html">M4</a>.</p>
+
+<h2>M2 (MVP) status</h2>
+<p>With M2-01…04 the Python-service MVP is contract-complete and unit-green: skeleton + readiness, both endpoints with the flat-v1 contract and error mapping, the size cap and scrubbed-500 hardening, and this multi-turn exit test. As with M1, the <strong>Presidio-backed confirmation</strong> (the integration variant + a manual <code>curl</code> round-trip) is the first action on a dev/CI machine with the model installed. The <strong>Go/TS front-end (M2-05)</strong> remains deferred pending the Go-vs-TS and IPC-protocol picks.</p>
+
+<h2>Definition of done</h2>
+<ul>
+  <li>Multi-turn test green in-sandbox (fake analyzer): cross-turn stability, fresh-token minting, round-trip.</li>
+  <li>Presidio-backed variant present, skipped when the model is absent.</li>
+  <li>Full suite green.</li>
+</ul>
+
+</body>
+</html>
