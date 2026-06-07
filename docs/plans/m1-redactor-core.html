@@ -154,7 +154,7 @@ tests/
     <tr><td>Python version</td><td>3.11+</td><td>Matches current Presidio/spaCy support.</td></tr>
     <tr><td>Dependency manager</td><td><strong>pip + venv</strong></td><td>Hash-pinned <code>requirements.txt</code> compiled from <code>requirements.in</code> (e.g. <code>pip-compile</code>) for reproducibility — supports threat T8. These land with the eval-harness spec; <code>pyproject.toml</code> holds pytest config in the interim.</td></tr>
     <tr><td>Test framework</td><td>pytest</td><td>De-facto standard.</td></tr>
-    <tr><td>spaCy model</td><td><strong>en_core_web_lg</strong></td><td>Presidio default; CPU-friendly. Escalate to <code>en_core_web_trf</code> only if the recall gate (&ge; 0.99) can't be met with <code>lg</code> + recognizer tuning.</td></tr>
+    <tr><td>spaCy model</td><td><strong>en_core_web_trf</strong> (default)</td><td>Adopted 2026-06-07: lg missed the recall targets (PERSON/DATE/PHONE); trf passes them. lg stays a fast/low-recall alternative. See <a href="../specs/m1-08-eval-harness.html#baseline">M1-08 baseline</a>.</td></tr>
     <tr><td>Engine</td><td>Presidio <em>(locked, M0)</em></td><td>Analyzer + custom anonymization for the token format.</td></tr>
   </tbody>
 </table>
@@ -185,7 +185,7 @@ tests/
 <h2 id="open">Open items</h2>
 <ol>
   <li><strong>Front-end language (Go vs TS):</strong> ADR 0001 nominally picks this &ldquo;at M1 start,&rdquo; but M1 is pure Python — so it does <em>not</em> block M1 core work and can be settled before M2. Flagging so it isn't forgotten.</li>
-  <li><strong>spaCy escalation (contingency, not blocking):</strong> if <code>en_core_web_lg</code> + recognizer tuning can't reach per-entity recall &ge; 0.99 on the corpus, escalate to <code>en_core_web_trf</code> and re-measure the size/latency cost before committing.</li>
+  <li><strong>spaCy escalation — DONE (2026-06-07).</strong> lg fell short on PERSON/DATE/PHONE; <code>en_core_web_trf</code> was measured (passes all per-type targets at a latency/size cost) and adopted as the default.</li>
 </ol>
 
 </body>

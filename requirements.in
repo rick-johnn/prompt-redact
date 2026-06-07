@@ -12,21 +12,26 @@
 # --- runtime ---
 presidio-analyzer>=2.2,<3
 spacy>=3.7,<4
+spacy-transformers>=1.3,<2   # for the default transformer NER model (pulls torch)
 
 # service (M2): FastAPI app + ASGI server
 fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
 
-# The spaCy NER model the analyzer defaults to (en_core_web_lg, ~560 MB). It is
-# not on PyPI; install it with:
+# The analyzer DEFAULTS to the TRANSFORMER model en_core_web_trf — required to
+# meet the per-type recall targets (it lifts PERSON/DATE/PHONE to ~1.0). It pulls
+# torch and is large/slower on CPU; en_core_web_lg is the faster, lower-recall
+# alternative (AnalyzerConfig(spacy_model="en_core_web_lg")). Models aren't on
+# PyPI; install with:
 #
-#     python -m spacy download en_core_web_lg
+#     python -m spacy download en_core_web_trf      # default
+#     python -m spacy download en_core_web_lg       # fast alternative
 #
 # For a pinned / offline install (threat T8 — mirror the artifact inside the
-# trust boundary), add its release wheel here instead, aligned to the resolved
-# spaCy version, e.g.:
+# trust boundary), add the release wheel here, aligned to the resolved spaCy
+# version, e.g.:
 #
-#     en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.7.1/en_core_web_lg-3.7.1-py3-none-any.whl
+#     en_core_web_trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl
 
 # --- test ---
 pytest>=8,<9
