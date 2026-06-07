@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M2-03: Size cap + logging discipline</title>
+</head>
+<body>
+
+<h1>Spec M2-03 — Request size cap + logging discipline</h1>
+
+<p>Third M2 spec (<a href="../plans/m2-service.html">plan</a>). Hardens the service against two threats deferred from M2-02: oversized bodies (<a href="../ARCHITECTURE.html#threat-model">T9</a>) and identifier leakage through logs / crash paths (<a href="../ARCHITECTURE.html#threat-model">T2/T3</a>).</p>
+
+<p>File: <code>prompt_redact_service/app.py</code>. Tests: <code>tests/test_service_limits.py</code>. No new deps; no Presidio needed.</p>
+
+<h2>Request size cap (T9)</h2>
+<ul>
+  <li><code>BodySizeLimitMiddleware</code> (pure ASGI) rejects bodies over a configurable cap with <code>413 {"detail":"request body too large"}</code>.</li>
+  <li><strong>Two layers:</strong> a fast reject when a declared <code>Content-Length</code> exceeds the cap (so a huge declared body is refused before it's read), <em>and</em> a running byte count while buffering the body — covering chunked or missing <code>Content-Length</code>, so an oversized stream can't slip through to the expensive NER pass. Buffering is bounded by the cap.</li>
+  <li><strong>Configurable</strong> via <code>max_body_bytes</code> (default: the <code>PROMPT_REDACT_MAX_BODY_BYTES</code> env var, else 1&nbsp;MB).</li>
+  <li><code>/healthz</code> and other body-less requests pass through unaffected.</li>
+</ul>
+
+<h2>Logging discipline &amp; the scrubbed 500 path (T2/T3)</h2>
+<ul>
+  <li><strong>No bodies in logs.</strong> The service logs nothing containing request/response bodies; FastAPI/uvicorn access logs carry method/path/status only. Our own log lines never include <code>text</code> or the token map.</li>
+  <li><strong>Scrubbed unexpected-error path.</strong> Each handler wraps the core call in a final <code>except Exception</code> that logs <em>only the exception type name</em> and raises <code>HTTPException(500, "internal error")</code> <strong>with <code>from None</code></strong>. Dropping the exception chain means the original error — whose message could embed the input text (e.g. an engine error like &ldquo;choked on &lt;text&gt;&rdquo;) — is never re-raised to the server-error middleware, so no traceback or message carrying input is logged or returned.</li>
+  <li>This is why the unexpected-error response is a flat <code>{"detail":"internal error"}</code> and contains none of the input.</li>
+</ul>
+
+<h2>Error responses recap (with M2-02)</h2>
+<table>
+  <thead><tr><th>Condition</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td>Body over the cap</td><td><code>413</code></td></tr>
+    <tr><td>Malformed body / token-shaped input / invalid map / bad language</td><td><code>400</code></td></tr>
+    <tr><td>Unknown token (unredact)</td><td><code>422</code></td></tr>
+    <tr><td>Not ready</td><td><code>503</code></td></tr>
+    <tr><td>Unexpected failure</td><td><code>500</code> (generic, scrubbed)</td></tr>
+  </tbody>
+</table>
+
+<h2>Test plan (<code>tests/test_service_limits.py</code>)</h2>
+<ul>
+  <li>Oversized body → <code>413</code> with the generic detail; body within the cap → <code>200</code>.</li>
+  <li>Cap honored from the <code>PROMPT_REDACT_MAX_BODY_BYTES</code> env var.</li>
+  <li><code>/healthz</code> not blocked by the cap.</li>
+  <li>An engine error whose message embeds the input → <code>500 {"detail":"internal error"}</code>, and the input string is asserted <strong>absent</strong> from the response.</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li>Configurable body-size cap returning <code>413</code>; enforced by declared length and actual bytes.</li>
+  <li>Unexpected errors return a generic, input-free <code>500</code>; only the exception type is logged.</li>
+  <li>Tests green without Presidio; full suite green.</li>
+</ul>
+
+</body>
+</html>
