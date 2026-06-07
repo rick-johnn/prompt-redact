@@ -22,7 +22,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from presidio_analyzer import AnalyzerEngine
 
 DEFAULT_LANGUAGE = "en"
-DEFAULT_SPACY_MODEL = "en_core_web_lg"
+# Transformer model: required to meet the per-type recall targets — en_core_web_lg
+# falls short on PERSON/DATE/PHONE (see the M1-08 baseline). en_core_web_lg remains
+# a faster, lower-recall alternative via AnalyzerConfig(spacy_model="en_core_web_lg").
+DEFAULT_SPACY_MODEL = "en_core_web_trf"
 
 
 @dataclass(frozen=True)

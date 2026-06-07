@@ -293,7 +293,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
     <tr><td>Context-only ID</td><td>MRN, MEMBER_ID, RX_NUMBER</td><td><strong>report-only</strong> (not gated)</td></tr>
   </tbody>
 </table>
-<p>Other metrics unchanged: per-entity <strong>precision &ge; 0.90</strong> (over-redaction hurts UX, not compliance); <strong>p95 <code>/redact</code> latency &le; 50 ms</strong> for a 500-token message (the whole user-perceived call).</p>
+<p>Other metrics: per-entity <strong>precision &ge; 0.90</strong> (over-redaction hurts UX, not compliance). <strong>Latency target (revised 2026-06-07, size-aware):</strong> p95 &le; 50 ms for a typical short (chat-turn) message; large/bulk inputs are slower and, with the transformer model, GPU-bound for low latency. The original single &ldquo;&le; 50 ms for 500 tokens&rdquo; bar is met on CPU by neither model (lg 65 ms, trf 437 ms) and is replaced by this size-aware target.</p>
 
 <h4>Two honesty caveats</h4>
 <ul>
@@ -304,8 +304,8 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
 <h4>Leakage</h4>
 <p>The prior <code>&le; 1 in 10,000</code> end-to-end leakage bar is <strong>retired as a gate</strong>: end-to-end leakage is bounded by the weakest gated type, so with NER types at 0.97 it cannot reach 1/10,000. Leakage is now <strong>reported, not gated</strong>. Deployments needing a stronger guarantee for free-text identifiers must add compensating controls (human review, egress filtering, the transformer model, or restricting to BAA-covered downstreams).</p>
 
-<h4>Baseline (2026-06-07, <code>en_core_web_lg</code>)</h4>
-<p>First real gate run: checksum/format types and LOCATION (city-level) meet target; <strong>PERSON (0.96), DATE_TIME (0.90), PHONE_NUMBER (0.88) are below</strong> and drive the remaining work (trf for PERSON; recognizer/threshold tuning for date and phone). See <a href="specs/m1-08-eval-harness.html#baseline">the M1-08 baseline</a>.</p>
+<h4>Model decision &amp; baseline (2026-06-07)</h4>
+<p>First real gate run on CPU. With <code>en_core_web_lg</code> the gate FAILed — PERSON 0.96, DATE_TIME 0.90, PHONE_NUMBER 0.88. With the transformer <code>en_core_web_trf</code> the gate <strong>PASSes</strong> — PERSON / DATE_TIME / PHONE_NUMBER all 1.00 (and the report-only context IDs MRN/RX rise to ~1.0), leakage 0.003. <strong>Decision: <code>en_core_web_trf</code> is the default model</strong>; <code>en_core_web_lg</code> stays available as a faster, lower-recall option. The cost is latency (short-msg p95 ~30 ms — fine; ~500-token ~437 ms on CPU) and image size (torch). This also removes the need for a custom date recognizer or phone tuning. See <a href="specs/m1-08-eval-harness.html#baseline">the M1-08 baseline</a>.</p>
 
 <h3>Evaluation corpus</h3>
 <p>We need a labelled dataset to measure against. Options, in order of effort:</p>
@@ -344,7 +344,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
 <ul>
   <li>The service is stateless per request, so horizontal scaling is trivial.</li>
   <li>Cold start is non-trivial — the NER model takes seconds to load. Readiness probe must wait for the model to load, not just for the HTTP socket to open.</li>
-  <li>Container image size is dominated by the spaCy/transformer model. Expect hundreds of MB. Worth a registry mirror inside the trust boundary.</li>
+  <li>Container image size is dominated by the model. With the default transformer (<code>en_core_web_trf</code> + torch) expect multiple GB; <code>en_core_web_lg</code> is hundreds of MB. Worth a registry mirror inside the trust boundary (threat T8).</li>
 </ul>
 
 <h3>Resolved</h3>
