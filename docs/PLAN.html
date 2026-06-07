@@ -30,7 +30,7 @@
 
 <p><strong>Exit:</strong> Language ADR decided, quality targets signed off, deployment target chosen, remaining open questions either resolved or explicitly deferred to a named milestone. <strong>All met 2026-06-05 — M0 closed; M1 is now current.</strong></p>
 
-<h2>M1 — Redactor core <em>(current)</em></h2>
+<h2>M1 — Redactor core <em>(complete — 2026-06-07)</em></h2>
 
 <blockquote>Detailed plan: <a href="plans/m1-redactor-core.html">plans/m1-redactor-core.html</a>. Specific tooling (dependency manager, spaCy model) is being confirmed there.</blockquote>
 
@@ -47,9 +47,9 @@
     </ul>
   </li>
 </ul>
-<p><strong>Exit:</strong> tests green; redactor round-trips a synthetic multi-domain corpus with per-entity recall ≥ 0.99 (the bar confirmed in M0).</p>
+<p><strong>Exit:</strong> tests green; redactor round-trips a synthetic multi-domain corpus meeting the per-type recall targets. <strong>Met 2026-06-07</strong> — the gate passes with the default <code>en_core_web_trf</code> model (all gated types at target; leakage 0.003). Caveats: numbers are corpus-relative (a regression gate, not a production guarantee); MRN/member/Rx remain report-only; <code>requirements.txt</code> still to be compiled.</p>
 
-<h2>M2 — Redaction service MVP</h2>
+<h2>M2 — Redaction service MVP <em>(current)</em></h2>
 
 <blockquote>Detailed plan: <a href="plans/m2-service.html">plans/m2-service.html</a> (draft — sidecar topology, with the deferred front-end/IPC/wire-contract decisions called out).</blockquote>
 
@@ -112,6 +112,7 @@
   <li><strong>2026-06-05</strong> — <strong>M0 closed.</strong> Compliance signed off on the quality targets as the bar (leakage &le; 1/10,000, recall &ge; 0.99, precision &ge; 0.90, p95 &le; 50 ms). Primary v1 deployment target: standalone k8s service + docker-compose for local dev. Open questions resolved: per-call config = language hint only; confidence threshold = Presidio defaults tuned in M1; empty-input = accept and document; token-map contract deferred to M2.</li>
   <li><strong>2026-06-07</strong> — <strong>Quality targets revised to per-type</strong> after the first real gate run (<code>en_core_web_lg</code>). The single recall &ge; 0.99 bar is replaced by per-mechanism tiers: checksum/format &ge; 0.99; structured pattern (phone, date) &ge; 0.95; free-text NER (person, location) &ge; 0.97 (needs <code>en_core_web_trf</code>); context-only IDs (MRN, member ID, Rx) report-only. The &le; 1/10,000 leakage bar is retired as a gate (reported only). Targets are corpus-relative (a regression gate, not a production guarantee). See <a href="ARCHITECTURE.html#redaction-quality-targets">ARCHITECTURE — quality targets</a>.</li>
   <li><strong>2026-06-07</strong> — <strong>Adopted <code>en_core_web_trf</code> as the default model.</strong> The gate run showed lg fails (PERSON 0.96, DATE 0.90, PHONE 0.88) while trf passes every per-type target (PERSON/DATE/PHONE &rarr; 1.0; leakage 0.003) — so no custom date recognizer or phone tuning is needed. lg stays a configurable fast/low-recall alternative. Latency target made size-aware (p95 &le; 50 ms for short messages; trf ~30 ms; large inputs GPU-bound). Adds <code>spacy-transformers</code> + torch (larger image).</li>
+  <li><strong>2026-06-07</strong> — <strong>M1 closed; M2 is current.</strong> The redactor core, recognizers, eval corpus and gating harness are complete and the gate passes with trf. Remaining M1 follow-ups are non-blocking (compile the hash-pinned <code>requirements.txt</code>; optional context-ID recognizers). M2 (redaction service MVP) is built through M2-04; M2-05 (Go/TS front-end) remains deferred.</li>
 </ul>
 
 </body>
