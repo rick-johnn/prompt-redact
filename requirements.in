@@ -13,6 +13,10 @@
 presidio-analyzer>=2.2,<3
 spacy>=3.7,<4
 
+# service (M2): FastAPI app + ASGI server
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+
 # The spaCy NER model the analyzer defaults to (en_core_web_lg, ~560 MB). It is
 # not on PyPI; install it with:
 #
@@ -26,3 +30,4 @@ spacy>=3.7,<4
 
 # --- test ---
 pytest>=8,<9
+httpx>=0.27,<1   # required by fastapi.testclient

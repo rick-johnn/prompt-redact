@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M2-01: Service skeleton + readiness</title>
+</head>
+<body>
+
+<h1>Spec M2-01 — Service skeleton + readiness</h1>
+
+<p>First implementation spec for <a href="../plans/m2-service.html">M2</a>. Stands up the FastAPI app and the <code>GET /healthz</code> readiness probe; the redaction endpoints arrive in M2-02. Per the M2 decisions, this is the <strong>Python service MVP</strong> (FastAPI); the Go/TS front-end is a later spec.</p>
+
+<p>Package: <code>prompt_redact_service/</code> — <code>app.py</code> (<code>create_app</code> factory + <code>/healthz</code>). Deps added to <code>requirements.in</code>: <code>fastapi</code>, <code>uvicorn[standard]</code>, and <code>httpx</code> (test-only, for <code>TestClient</code>). Tests: <code>tests/test_service_health.py</code>.</p>
+
+<h2>Design</h2>
+<ul>
+  <li><strong>Eager analyzer build at startup.</strong> The lifespan handler builds (and warms) the analyzer before the service serves traffic. The analyzer's own docs warn its lazy first build isn't synchronized, so warming it up front avoids a concurrent-first-request race.</li>
+  <li><strong>Injected analyzer provider.</strong> <code>create_app(analyzer_provider=…)</code> takes the builder as an argument; the default imports Presidio <em>lazily</em> and warms the model, while tests pass a fake provider. So importing <code>prompt_redact_service</code> needs FastAPI but not Presidio, and the whole skeleton is testable without the ML stack.</li>
+  <li><strong>Up-but-unready on build failure.</strong> If the provider throws at startup, the service still starts but stays unready: <code>/healthz</code> returns <code>503</code>, so a readiness probe fails (no traffic routed) instead of crash-looping. The failure is logged.</li>
+  <li><strong><code>/healthz</code>:</strong> <code>200 {"status":"ok"}</code> once ready; <code>503 {"status":"unavailable"}</code> otherwise.</li>
+  <li><strong>ASGI entrypoint:</strong> module-level <code>app = create_app()</code> (real provider) for <code>uvicorn prompt_redact_service.app:app</code>.</li>
+</ul>
+
+<h2>Public surface</h2>
+<ul>
+  <li><code>create_app(analyzer_provider=default_analyzer_provider) -&gt; FastAPI</code></li>
+  <li><code>default_analyzer_provider()</code> — builds + warms <code>RedactionAnalyzer</code> (lazy Presidio import).</li>
+  <li><code>GET /healthz</code>.</li>
+</ul>
+
+<h2>Test plan (<code>tests/test_service_health.py</code>)</h2>
+<ul>
+  <li><code>/healthz</code> → 200 ok when the provider builds; → 503 unavailable when it raises.</li>
+  <li>Analyzer built eagerly <strong>exactly once</strong> at startup, not per request.</li>
+  <li>Service state holds the built analyzer and is ready; stays unready (analyzer <code>None</code>) after a failed build.</li>
+  <li>(All via injected fake providers + <code>TestClient</code> — no Presidio.)</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>prompt_redact_service/</code> app with <code>/healthz</code>; eager build via injected provider.</li>
+  <li><code>requirements.in</code> updated (fastapi, uvicorn, httpx).</li>
+  <li>Tests green without Presidio; full suite green.</li>
+  <li>No Presidio import at package import time.</li>
+</ul>
+
+</body>
+</html>
