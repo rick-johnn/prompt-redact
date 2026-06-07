@@ -47,7 +47,23 @@
 </ul>
 
 <h2>M1 exit status</h2>
-<p>This spec completes the M1 <em>machinery</em>: redactor + recognizers + corpus + a gating harness, all unit-green. <strong>M1 formally exits only when <code>run_eval</code> is executed in a Presidio-enabled environment and the recall gate passes</strong> (and the threshold is tuned if any gated type falls short). That run can't happen in the design sandbox (no Presidio), so it is the first action on a dev/CI machine. Until then, recall numbers are unverified and the gate result is pending.</p>
+<p>This spec completes the M1 <em>machinery</em>: redactor + recognizers + corpus + a gating harness, all unit-green. M1 formally exits only when the recall gate passes. The gate was first run with real Presidio + <code>en_core_web_lg</code> on 2026-06-07 (below) and currently <strong>FAILs</strong> — so M1 is not yet closed; the failing types drive the model/recognizer tuning step.</p>
+
+<h2 id="baseline">Baseline results (2026-06-07 · en_core_web_lg · default threshold)</h2>
+<p>300-example corpus (50/template), after the corpus-realism fix (valid NANP phones, city-level LOCATION). Gate = per-entity recall &ge; 0.99 on gated types.</p>
+<table>
+  <thead><tr><th>entity</th><th>recall</th><th>prec</th><th>gold</th><th>status</th></tr></thead>
+  <tbody>
+    <tr><td>CREDIT_CARD / DEA / EMAIL_ADDRESS / LOCATION / NPI / US_SSN</td><td>1.000</td><td>1.000</td><td>50–100</td><td>ok</td></tr>
+    <tr><td>PERSON</td><td>0.960</td><td>0.968</td><td>250</td><td>FAIL</td></tr>
+    <tr><td>DATE_TIME</td><td>0.900</td><td>0.765</td><td>100</td><td>FAIL</td></tr>
+    <tr><td>PHONE_NUMBER</td><td>0.880</td><td>1.000</td><td>50</td><td>FAIL</td></tr>
+    <tr><td>MEMBER_ID</td><td>0.980</td><td>—</td><td>50</td><td>report</td></tr>
+    <tr><td>MRN</td><td>0.880</td><td>—</td><td>50</td><td>report</td></tr>
+    <tr><td>RX_NUMBER</td><td>0.460</td><td>—</td><td>50</td><td>report</td></tr>
+  </tbody>
+</table>
+<p>Leakage 0.19. Gate <strong>FAIL</strong>. Reading: format/checksum types and city-level LOCATION are solid; <strong>PERSON</strong> needs a stronger model (<code>en_core_web_trf</code>); <strong>DATE_TIME</strong> needs recognizer/threshold tuning (both recall and precision); <strong>PHONE_NUMBER</strong> has a residual gap (recognizer strictness / remaining NANP-invalid generations). MRN / MEMBER_ID / RX are ungated until their recognizers are built and tuned (RX especially low). Street-level addresses are deliberately out of the corpus — a known gap needing a dedicated recognizer.</p>
 
 <h2>Definition of done</h2>
 <ul>
