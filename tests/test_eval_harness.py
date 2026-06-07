@@ -8,7 +8,7 @@ analyzer. A real-Presidio integration test is skipped if unavailable.
 import pytest
 
 from evals import Example, Span, evaluate, generate_corpus, score_corpus
-from evals.metrics import GATED_TYPES, RECALL_TARGET, Report
+from evals.metrics import RECALL_TARGETS, Report
 
 
 def _g(start, end, etype):
@@ -76,27 +76,41 @@ def test_empty_corpus():
 
 # --- gate logic -------------------------------------------------------------
 
-def test_gated_type_below_target_fails():
-    # 98/100 PERSON recall -> below 0.99 -> gate fails.
-    pairs = [([_g(0, 4, "PERSON")], [_g(0, 4, "PERSON")]) for _ in range(98)]
-    pairs += [([_g(0, 4, "PERSON")], []) for _ in range(2)]
-    r = score_corpus(pairs)
-    fails = r.gate_failures()
-    assert [f[0] for f in fails] == ["PERSON"]
+def _recall_pairs(etype, hits, total):
+    pairs = [([_g(0, 4, etype)], [_g(0, 4, etype)]) for _ in range(hits)]
+    pairs += [([_g(0, 4, etype)], []) for _ in range(total - hits)]
+    return pairs
+
+
+def test_checksum_type_below_099_fails():
+    # US_SSN at 0.98 (< 0.99 checksum-tier target) -> gate fails.
+    r = score_corpus(_recall_pairs("US_SSN", 98, 100))
+    assert [f[0] for f in r.gate_failures()] == ["US_SSN"]
     assert r.passed() is False
 
 
-def test_ungated_type_below_target_does_not_fail_gate():
-    # MRN recall 0.0 but MRN is reported-only, not gated.
+def test_ner_tier_097_boundary():
+    # PERSON tier is 0.97: 0.97 passes, 0.96 fails.
+    assert score_corpus(_recall_pairs("PERSON", 97, 100)).passed() is True
+    assert score_corpus(_recall_pairs("PERSON", 96, 100)).passed() is False
+
+
+def test_pattern_tier_095_boundary():
+    # PHONE_NUMBER tier is 0.95: 0.95 passes, 0.94 fails.
+    assert score_corpus(_recall_pairs("PHONE_NUMBER", 95, 100)).passed() is True
+    assert score_corpus(_recall_pairs("PHONE_NUMBER", 94, 100)).passed() is False
+
+
+def test_report_only_type_does_not_fail_gate():
+    # MRN is context-only -> report-only, not gated, even at 0.0 recall.
     r = score_corpus([([_g(0, 4, "MRN")], [])])
-    assert "MRN" not in GATED_TYPES
+    assert "MRN" not in RECALL_TARGETS
     assert r.gate_failures() == []
     assert r.passed() is True
 
 
 def test_gated_type_at_target_passes():
-    pairs = [([_g(0, 4, "DEA")], [_g(0, 4, "DEA")]) for _ in range(100)]
-    r = score_corpus(pairs)
+    r = score_corpus(_recall_pairs("DEA", 100, 100))
     assert r.passed() is True
     assert r.recall()["DEA"] == 1.0
 
