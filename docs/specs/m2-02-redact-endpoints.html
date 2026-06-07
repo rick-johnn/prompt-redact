@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M2-02: /redact + /unredact</title>
+</head>
+<body>
+
+<h1>Spec M2-02 — <code>/redact</code> + <code>/unredact</code></h1>
+
+<p>Second M2 spec (<a href="../plans/m2-service.html">plan</a>). Adds the two redaction endpoints to the <a href="m2-01-service-skeleton.html">M2-01</a> FastAPI app, wrapping <code>prompt_redact_core</code>, with the flat-v1 token-map wire contract and the agreed error mapping.</p>
+
+<p>File: <code>prompt_redact_service/app.py</code> (models + handlers). Tests: <code>tests/test_service_redact.py</code>. No new deps; runs without Presidio via an injected fake analyzer.</p>
+
+<h2>Endpoints</h2>
+<ul>
+  <li><code>POST /redact</code> — <code>{text, token_map?, language?}</code> → <code>{redacted_text, token_map}</code>.</li>
+  <li><code>POST /unredact</code> — <code>{text, token_map}</code> → <code>{text}</code>.</li>
+</ul>
+
+<h2>Token-map wire contract (v1)</h2>
+<p>Flat <code>{token: original}</code> JSON — identical to the in-memory shape <code>prompt_redact_core</code> uses, so there is no transform at the boundary. Documented as v1; versioning is added only on a breaking change (M2 decision).</p>
+
+<h2>Error mapping</h2>
+<table>
+  <thead><tr><th>Condition</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td>Malformed body (missing/typed fields)</td><td><code>400</code></td></tr>
+    <tr><td>Token-shaped substring in <code>/redact</code> input (T5)</td><td><code>400</code></td></tr>
+    <tr><td>Invalid token_map / unsupported language</td><td><code>400</code></td></tr>
+    <tr><td>Unknown token in <code>/unredact</code> (core raises <code>UnknownTokenError</code>)</td><td><code>422</code></td></tr>
+    <tr><td>Service not ready (model not loaded)</td><td><code>503</code></td></tr>
+    <tr><td>Unexpected engine failure</td><td><code>500</code> (FastAPI default)</td></tr>
+  </tbody>
+</table>
+
+<h2>Resolved decisions</h2>
+<ul>
+  <li><strong>Validation errors → <code>400</code>, not FastAPI's default <code>422</code>.</strong> The <code>RequestValidationError</code> handler is overridden so a malformed body is a <code>400</code> (matching the plan), leaving <code>422</code> to mean exactly one thing: a valid request whose token map is out of sync (unknown token).</li>
+  <li><strong>Error responses are generic — no input echoed.</strong> Handlers return fixed messages (e.g. &ldquo;malformed request body&rdquo;), never <code>str(exc)</code> or the offending value. Pydantic's default validation detail and some core error messages can contain the submitted text or originals; echoing them would leak PII (threat T2). Status code + generic message only.</li>
+  <li><strong>Per-call <code>language</code> is validated against the loaded model.</strong> The service runs one eagerly-built analyzer (one language). A request whose <code>language</code> differs from the analyzer's configured language is rejected <code>400</code> rather than silently mis-detected. (Only the language code — not PII — appears in that message.)</li>
+  <li><strong>Readiness gate.</strong> Both endpoints return <code>503</code> if the analyzer never built (consistent with <code>/healthz</code>).</li>
+</ul>
+
+<h2>Deferred to M2-03</h2>
+<p>The request <strong>size cap</strong> (<code>413</code>, T9) and <strong>logging discipline</strong> (no request/response bodies in logs; scrub the unexpected-<code>500</code> path so a traceback can't carry input text — T2/T3). Until then, rely on FastAPI's default <code>500</code> (which doesn't echo the body in the response) and avoid logging bodies.</p>
+
+<h2>Test plan (<code>tests/test_service_redact.py</code>)</h2>
+<ul>
+  <li><strong>/redact:</strong> single detection; no-PII identity; reuse of a supplied token_map (cross-call numbering); token-shaped input → 400; unsupported language → 400; malformed body → 400; not-ready → 503.</li>
+  <li><strong>/unredact:</strong> restores originals; unknown token → 422; no-token passthrough; malformed body → 400.</li>
+  <li><strong>Round trip</strong> through the API: redact then unredact reconstructs the original.</li>
+  <li>All via an injected fake analyzer (with <code>config.language</code> + preset detections) + <code>TestClient</code> — no Presidio.</li>
+</ul>
+
+<h2>Definition of done</h2>
+<ul>
+  <li>Both endpoints implemented with the flat-v1 contract and the error mapping above.</li>
+  <li>Validation → 400; unknown-token → 422; no input echoed in any error.</li>
+  <li>Tests green without Presidio; full suite green.</li>
+</ul>
+
+</body>
+</html>
