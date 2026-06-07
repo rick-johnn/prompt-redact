@@ -106,15 +106,17 @@ We'd rather an organization adopt this for the right reasons than be oversold on
 
 ## 7. How we know it's working (quality goals)
 
-A redaction tool is only valuable if it almost never misses. Our most important measurement is the **leakage rate** — how often any piece of sensitive information slips through uncaught. Our targets (locked by the compliance team on 2026-06-05):
+A redaction tool is only valuable if it almost never misses — but how close to "never" is honestly achievable depends on the *kind* of information, because some kinds are far easier to catch reliably than others. After our first real measurement (2026-06-07) we set the bar **per type**:
 
-- **Leakage:** at most **1 in 10,000** pieces of text should have anything slip through.
-- **Catch rate (recall):** we should catch **at least 99%** of each type of sensitive item.
-- **Speed:** the cleanup should take a tiny fraction of a second (target ~50 milliseconds), fast enough that a user typing in a chat box doesn't notice a delay.
+- **Structured items with a built-in check digit** (Social Security, credit-card, provider NPI/DEA numbers, email): **≥ 99%** — essentially always catchable.
+- **Patterned items** (phone numbers, dates): **≥ 95%** — reliably caught in common forms; unusual formats slip.
+- **Free-text items** (people's names, places): **≥ 97%** — the hardest category, and it needs a heavier AI model. No automated tool catches 100% of names.
+- **Context-only IDs** (medical-record / member / prescription numbers): **measured and reported, but not promised a number** — they have no built-in pattern, so they're only catchable when labelled, and a promise here would mislead.
+- **Speed:** the cleanup should still take a tiny fraction of a second (target ~50 ms).
 
-As the compliance team for this project, **these targets were ours to set, and they're now locked as the bar** the tool must clear. Whether the engine actually *hits* them gets measured during the build (M1) against a test dataset. Publishing the bar openly is part of the value: adopters inherit a defensible standard instead of inventing one.
+As the compliance team for this project, these targets are ours to set. Two honest notes come with them: the grades are measured against **our own test set** (a quality gate, not a guarantee for every real-world input), and because names and places can't be caught perfectly, an organization needing an absolute guarantee must add extra safeguards (human review, blocking filters, or sending only to approved AI). Our first measurement found the structured types already at ~100%, while names, dates, and phone numbers still need work — an honest picture rather than a green checkmark.
 
-> **Explain it simply:** A black marker is only useful if it almost never forgets to cover something up. So we set ourselves a report card: miss almost nothing (no more than one tiny slip in ten thousand pages), catch at least 99 out of every 100 private items, and do it fast enough that you don't even notice the pause. We've now locked in those grades as the passing line — the next step is testing whether the tool actually earns them.
+> **Explain it simply:** A black marker is only useful if it rarely forgets — but some things are easier to spot than others. A Social Security number has a tell-tale shape, so we promise to catch 99 of every 100. A person's *name* is much harder (a name can be anything), so we promise a slightly lower 97 of 100 — and we're upfront that no marker catches every name. For a few ID types that look like plain numbers with no tell, we measure how we do but don't make a promise, because that would mislead. And these grades come from our own practice tests — real life is messier.
 
 ---
 

@@ -21,7 +21,7 @@ from .models import (
     validate_example,
 )
 from .generator import generate_corpus
-from .metrics import GATED_TYPES, RECALL_TARGET, Report, score_corpus
+from .metrics import RECALL_TARGETS, Report, score_corpus
 from .run_eval import evaluate
 
 __all__ = [
@@ -38,6 +38,5 @@ __all__ = [
     "Report",
     "score_corpus",
     "evaluate",
-    "GATED_TYPES",
-    "RECALL_TARGET",
+    "RECALL_TARGETS",
 ]

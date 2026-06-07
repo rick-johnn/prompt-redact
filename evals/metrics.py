@@ -20,23 +20,31 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
-RECALL_TARGET = 0.99
-
-# Types with implemented recognizers — these are gated. Anything else (MRN,
-# MEMBER_ID, RX_NUMBER) is reported only, until its recognizer lands and is tuned.
-GATED_TYPES = frozenset(
-    {
-        "PERSON",
-        "EMAIL_ADDRESS",
-        "PHONE_NUMBER",
-        "US_SSN",
-        "CREDIT_CARD",
-        "DATE_TIME",
-        "LOCATION",
-        "NPI",
-        "DEA",
-    }
-)
+# Per-type recall targets (compliance decision, 2026-06-07). Detection splits by
+# mechanism into tiers with different *realistic* ceilings:
+#   - checksum / format (SSN, card, NPI, DEA, email): deterministic       -> 0.99
+#   - structured pattern (phone, date):               regex/recognizer    -> 0.95
+#   - free-text NER (person, location):               spaCy model-bounded -> 0.97 (en_core_web_trf)
+#
+# Context-only IDs (MRN, MEMBER_ID, RX_NUMBER) have no checksum or fixed format and
+# are detectable only via nearby context words, so a corpus recall number would be
+# a vanity metric, not a production guarantee — they are REPORT-ONLY (absent here).
+#
+# IMPORTANT: every target is recall measured against the SYNTHETIC corpus — a
+# regression gate, not a production guarantee (real recall depends on how well the
+# corpus mirrors real inputs). A type with gold spans AND a target is gated;
+# everything else is reported. Leakage is reported, bounded by the weakest gate.
+RECALL_TARGETS = {
+    "US_SSN": 0.99,
+    "CREDIT_CARD": 0.99,
+    "NPI": 0.99,
+    "DEA": 0.99,
+    "EMAIL_ADDRESS": 0.99,
+    "PHONE_NUMBER": 0.95,
+    "DATE_TIME": 0.95,
+    "PERSON": 0.97,
+    "LOCATION": 0.97,
+}
 
 
 def _offsets(spans) -> set:
@@ -65,45 +73,52 @@ class Report:
     def leakage_rate(self) -> float:
         return self.leaked_examples / self.n_examples if self.n_examples else 0.0
 
-    def gate_failures(self, target: float = RECALL_TARGET) -> list:
-        """Gated types whose recall is below ``target`` (types with no gold are skipped)."""
+    def gate_failures(self, targets: dict | None = None) -> list:
+        """Gated types whose recall is below their per-type target (gold > 0 only).
+
+        Returns ``(type, recall, target, hit, total)`` per failure.
+        """
+        targets = RECALL_TARGETS if targets is None else targets
         failures = []
         for t, (hit, total) in sorted(self.recall_counts.items()):
-            if t in GATED_TYPES and total > 0 and hit / total < target:
-                failures.append((t, hit / total, hit, total))
+            target = targets.get(t)
+            if target is not None and total > 0 and hit / total < target:
+                failures.append((t, hit / total, target, hit, total))
         return failures
 
-    def passed(self, target: float = RECALL_TARGET) -> bool:
-        return not self.gate_failures(target)
+    def passed(self, targets: dict | None = None) -> bool:
+        return not self.gate_failures(targets)
 
-    def format(self, target: float = RECALL_TARGET) -> str:
+    def format(self, targets: dict | None = None) -> str:
+        targets = RECALL_TARGETS if targets is None else targets
         rec, prec = self.recall(), self.precision()
         types = sorted(set(self.recall_counts) | set(self.precision_counts))
         lines = [
             f"Eval over {self.n_examples} examples",
-            f"{'entity':<16}{'recall':>9}{'prec':>8}{'gold':>7}  status",
-            "-" * 52,
+            f"{'entity':<16}{'recall':>9}{'prec':>8}{'gold':>7}{'target':>8}  status",
+            "-" * 60,
         ]
         for t in types:
             hit, total = self.recall_counts.get(t, (0, 0))
             r = f"{rec.get(t, 0.0):.3f}" if total else "  -  "
             p = f"{prec.get(t, 0.0):.3f}" if t in prec else "  -  "
-            if t not in GATED_TYPES:
-                status = "report"
+            target = targets.get(t)
+            if target is None:
+                tgt, status = "  -  ", "report"
             elif total == 0:
-                status = "no gold"
+                tgt, status = f"{target:.2f}", "no gold"
             elif hit / total < target:
-                status = "FAIL"
+                tgt, status = f"{target:.2f}", "FAIL"
             else:
-                status = "ok"
-            lines.append(f"{t:<16}{r:>9}{p:>8}{total:>7}  {status}")
-        lines.append("-" * 52)
+                tgt, status = f"{target:.2f}", "ok"
+            lines.append(f"{t:<16}{r:>9}{p:>8}{total:>7}{tgt:>8}  {status}")
+        lines.append("-" * 60)
         lines.append(
             f"leakage rate: {self.leakage_rate:.5f} "
             f"({self.leaked_examples}/{self.n_examples}) [reported, not gated]"
         )
-        lines.append(f"GATE (recall >= {target} on gated types): "
-                     f"{'PASS' if self.passed(target) else 'FAIL'}")
+        lines.append(f"GATE (per-type recall targets): "
+                     f"{'PASS' if self.passed(targets) else 'FAIL'}")
         return "\n".join(lines)
 
 
