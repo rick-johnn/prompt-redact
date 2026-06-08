@@ -10,10 +10,35 @@
 
 <p>Plan for the <a href="../PLAN.html">M4</a> milestone: package the two-process sidecar (Go front-end + Python sidecar) so <code>docker compose up</code> brings up the stack and the M2 multi-turn integration test passes against it.</p>
 
-<p><strong>Status:</strong> Draft / sketch — decisions surfaced below. <strong>Verification gap:</strong> Docker is not available in the design sandbox (no daemon; a torch/<code>trf</code> image is multi-GB), so these artifacts are <em>authored</em> here and <strong>built and verified on a real Docker host</strong> — the same deferral as the hash-pinned <code>requirements.txt</code>. No artifacts are written until &ldquo;build&rdquo; is signalled and the decisions land.</p>
+<p><strong>Status:</strong> Draft, <strong>updated after architecture-team review</strong> (Petzold, Box, Carmack — full comments in <a href="../../M4_PACKAGING_DISCUSSION.md">M4_PACKAGING_DISCUSSION.md</a>). The review's throughline: <strong>workload is the gate</strong> (every packaging lean is downstream of it), and <strong>measure before deciding</strong> — most size/latency figures here are estimates that one real build + load test turns into facts. <strong>Verification gap:</strong> Docker is unavailable in the design sandbox, so artifacts are authored here and built/verified on a real Docker host. No Dockerfiles are authored until the prerequisites below are answered.</p>
 
 <h2>Goal (M4 exit)</h2>
 <p><code>docker compose up</code> brings up the front-end + sidecar; both report healthy; the M2 conversation test passes when pointed at the composed stack. Caller-integration docs explain when to call <code>/redact</code> and how to hold the token map.</p>
+
+<h2 id="prerequisites">Prerequisites (before any Dockerfile) — from the review</h2>
+<ol>
+  <li><strong>Answer the workload question.</strong> Short interactive turns vs bulk/large documents gates the image, the model, and CPU-vs-GPU. Get the load profile from whoever owns the calling app before deciding the rest. (All three reviewers; Carmack: &ldquo;it <em>is</em> everything.&rdquo;)</li>
+  <li><strong>Measure, don't estimate.</strong> Run the throwaway build in <a href="../../measure/"><code>measure/</code></a> on the Docker host to replace the size/latency tildes with real numbers — in particular build with the <strong>CPU-only torch wheel</strong> (most of the 1–2 GB is CUDA the CPU path never runs; this likely deflates the image-size tension <em>and</em> the CI-RAM problem at once). Capture real image size, cold-start, and p95/p99 latency on the actual deploy hardware.</li>
+</ol>
+
+<h2 id="measured">Measured (2026-06-07 · Docker Desktop · x86_64 · CPU-only torch)</h2>
+<p>From <a href="../../measure/"><code>measure/</code></a> — real numbers replacing the estimates:</p>
+<table>
+  <thead><tr><th>Metric</th><th>Estimate</th><th>Measured</th></tr></thead>
+  <tbody>
+    <tr><td>Sidecar <code>trf</code> image (CPU-only torch)</td><td>~3–4 GB</td><td><strong>3.91 GB</strong></td></tr>
+    <tr><td>Cold start (model load → <code>/healthz</code> ready)</td><td>tens of seconds</td><td><strong>4.1 s</strong></td></tr>
+    <tr><td>Short-message <code>/redact</code> latency</td><td>~30 ms</td><td><strong>~20 ms</strong></td></tr>
+    <tr><td>~500-token <code>/redact</code> latency</td><td>~437 ms</td><td><strong>~470 ms</strong></td></tr>
+  </tbody>
+</table>
+<p><strong>What the numbers change:</strong></p>
+<ul>
+  <li><strong>Image size is real even CPU-only.</strong> <code>trf</code> = <strong>3.91 GB</strong> <em>with</em> the CPU-only torch wheel — CPU-only is the right default but did <em>not</em> shrink it dramatically (torch + the transformer model are the bulk, not CUDA). The image-size tension stands.</li>
+  <li><strong>The <code>lg</code> number isn't fair yet.</strong> The shared measurement Dockerfile installs torch + <code>spacy-transformers</code> for both models, so <code>lg</code> came out <strong>3.67 GB</strong> — inflated by deps <code>lg</code> doesn't use (it's a CNN model; no torch). A properly built <code>lg</code> image drops torch + transformers and should be ~1–1.5 GB. <strong>Implication for M4-01:</strong> the dependency set must be <em>model-specific</em> (lg ≠ trf deps), and that's also what makes the <code>lg</code> variant actually worth shipping.</li>
+  <li><strong>Cold start is a non-issue</strong> (~4 s, not tens of seconds) — the readiness worry largely dissolves.</li>
+  <li><strong>Interactive latency is fine</strong> (~20 ms); large-document latency (~470 ms) confirms the bulk-workload concern.</li>
+</ul>
 
 <h2>Scope</h2>
 <h3>In</h3>
@@ -31,12 +56,19 @@
   <li>GPU image as the default (offered as a documented variant).</li>
 </ul>
 
-<h2 id="decisions">Decisions to make</h2>
+<h2 id="decisions">Decisions to work through (workload first)</h2>
 <ol>
-  <li><strong>Model bundling.</strong> How the ~GB <code>en_core_web_trf</code> + torch reach the sidecar image: <em>(a) bake in at build</em> (download during <code>docker build</code>) — no runtime network, reproducible, mirror-able (threat T8); largest image. <em>(b) download at container start</em> — smaller image, but a startup network dependency (at odds with on-prem). <em>(c) volume mount</em> — model managed/mirrored separately. <strong>Lean: (a)</strong> for the on-prem posture.</li>
-  <li><strong>CPU vs GPU default.</strong> CPU base image (broad compatibility; the torch CPU wheel) as the default, with a documented GPU variant for low-latency on large inputs (where <code>trf</code> needs it). <strong>Lean: CPU default + GPU variant.</strong></li>
-  <li><strong>Sidecar base image.</strong> <code>python:3.11-slim</code> vs distroless-python vs a fuller base. <strong>Lean: <code>python:3.11-slim</code></strong> (the model dominates size anyway).</li>
-  <li><strong>Front-end runtime image.</strong> <code>scratch</code> vs distroless static. <strong>Lean: distroless static</strong> (tiny, has CA certs, non-root).</li>
+  <li><strong>Primary workload</strong> <em>(the gate)</em>. Interactive short turns or bulk/large documents? Measured latency jumps ~14&times; from a short message to 500 tokens on CPU <code>trf</code>, so &ldquo;large document&rdquo; is the same path scaled until it hits a timeout — that ceiling must be a documented limit. If bulk is real, it may warrant its own async/batch verb (see interface decisions).</li>
+  <li><strong>Which image(s) to ship.</strong> <code>trf</code>-only (meets the bar; one artifact to sign/scan) vs <code>trf</code> + <code>lg</code> variants. <strong>If two ship, they must be interface-identical</strong> (same token types for the same input; recall-only differs) — else a caller's token map won't round-trip across whichever is deployed, and they're two services. The recurring cost of two variants is the doubled quality-test matrix, not the second Dockerfile. Unresolved pending workload + real <code>lg</code> demand; a documented one-line <code>--build-arg</code> override may cover <code>lg</code> without a second official artifact.</li>
+  <li><strong>Model bundling.</strong> Bake in at build (no runtime network — required for air-gap; reproducible <em>only if the model is pinned by version + digest</em>, like the deps) vs download-at-start (non-starter for air-gap) vs volume mount. <strong>Lean: bake in, pinned by hash</strong>, in its own cache-friendly layer.</li>
+  <li><strong>CPU vs GPU.</strong> CPU default (ship the CPU-only torch wheel) + a genuinely separate GPU image (CUDA wheel) for bulk/large inputs. <strong>Lean: CPU default + documented GPU variant</strong> — confirm against the workload.</li>
+  <li><strong>Base images.</strong> <code>python:3.11-slim</code> sidecar; distroless-static Go front-end. Pin the build platform (<code>--platform linux/amd64</code>) so arch doesn't depend on whose laptop built it (an arm64 image fails to start on x86_64). Multi-arch only when a real adopter needs it.</li>
+</ol>
+
+<h3>Interface decisions M4 must not foreclose silently (Box)</h3>
+<ol>
+  <li><strong>Token-map schema versioning.</strong> The flat <code>{token: original}</code> map is the contract every integrator couples to. Decide whether/how it's versioned before adding entity types changes it under callers.</li>
+  <li><strong>One verb for all workloads?</strong> A 437 ms synchronous <code>/redact</code> plus bulk batches over the same endpoint is a timeout waiting to happen. If bulk is real, decide whether it needs an async/batch verb — cheap now, expensive to retrofit.</li>
 </ol>
 
 <h2>Components</h2>
@@ -47,21 +79,23 @@
 </ul>
 
 <h2>Readiness</h2>
-<p>The sidecar's model load takes real time (seconds for <code>lg</code>, longer for <code>trf</code>); <code>/healthz</code> already flips ready only after warmup (M2-01). The compose healthcheck must allow a generous start period so the front-end waits for it.</p>
+<p>The sidecar's model load takes <strong>~4 s</strong> (<code>trf</code>, measured 2026-06-07 — far less than the feared tens of seconds); <code>/healthz</code> already flips ready only after warmup (M2-01). Compose must gate the front-end on <code>depends_on: condition: service_healthy</code> — a generous <code>start_period</code> alone only delays failure-counting, it doesn't hold traffic. <strong>Define the front-end's behavior during the warmup window</strong> (fast-fail with a clear <code>503</code> rather than hang or queue), since every crash-loop, rolling deploy, and OOM-kill pays the load cost again.</p>
 
 <h2>Exit criteria</h2>
 <ul>
-  <li><code>docker compose up</code> → both services healthy.</li>
-  <li>The M2 conversation round-trip passes against the front-end's published port.</li>
-  <li>Logs contain no raw identifiers; the sidecar is not reachable from outside the compose network.</li>
+  <li><code>docker compose up</code> → both services healthy (front-end gates on the sidecar via <code>depends_on: condition: service_healthy</code>, not mere container start).</li>
+  <li>The M2 conversation round-trip passes against the front-end's published port — the demo caller is a <strong>first-class, CI-green</strong> artifact (the executable spec of the contract).</li>
+  <li><strong>Tested security properties</strong> (not asserted captions): an automated check confirms the sidecar is <strong>unreachable from outside the compose network</strong> (negative test), and a test fails if any request body reaches a log sink (<strong>no-PII-logging</strong>, T2).</li>
+  <li>Real measured numbers recorded (image size, cold-start, p95/p99 latency on deploy hardware), replacing the estimates in this plan.</li>
 </ul>
 
-<h2>Proposed spec breakdown (once decisions land)</h2>
+<h2>Proposed spec breakdown (after the prerequisites)</h2>
 <ol>
-  <li><strong>M4-01</strong> — sidecar Dockerfile + compiled hash-pinned <code>requirements.txt</code>.</li>
-  <li><strong>M4-02</strong> — front-end Dockerfile (multi-stage).</li>
-  <li><strong>M4-03</strong> — <code>docker-compose.yml</code> + readiness wiring.</li>
-  <li><strong>M4-04</strong> — compose integration test (M2 round-trip against the stack) + caller-integration docs.</li>
+  <li><strong>M4-00</strong> — measurement + workload: run <a href="../../measure/"><code>measure/</code></a> on the Docker host, record real numbers, confirm the workload; settle the image / CPU-GPU / interface decisions on facts.</li>
+  <li><strong>M4-01</strong> — sidecar Dockerfile (CPU-only torch; model pinned by hash) + compiled hash-pinned <code>requirements.txt</code>.</li>
+  <li><strong>M4-02</strong> — front-end Dockerfile (multi-stage, distroless static, <code>--platform</code> pinned).</li>
+  <li><strong>M4-03</strong> — <code>docker-compose.yml</code> + readiness wiring + the sidecar-unreachable negative test.</li>
+  <li><strong>M4-04</strong> — compose integration test (M2 round-trip) as the CI-green demo caller + caller-integration docs (incl. the &ldquo;token map is the sensitive artifact&rdquo; caller contract).</li>
 </ol>
 
 <h2>Note: CI memory for the <code>trf</code> integration tests</h2>
