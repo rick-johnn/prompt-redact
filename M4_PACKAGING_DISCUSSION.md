@@ -4,6 +4,8 @@
 
 > **Review note:** This pass carries inline comments from three reviewers — Charles Petzold, Don Box, and John Carmack — each tagged so it's clear who is making which note.
 
+> **Resolution (2026-06-08):** The gating question is answered — the workload is **short interactive chat prompts, not large documents.** That settles the rest: **CPU-only, `trf`-only image** (no GPU, no shipped `lg` variant — `lg` stays a `--build-arg` escape hatch), **single synchronous `/redact`** (no batch verb), and the request size cap bounds oversized pastes (`413`). Token map stays flat-v1 (the M2 decision). See [`docs/plans/m4-packaging.html`](docs/plans/m4-packaging.html#resolved). The CPU `trf` sidecar image (M4-01) is now **built and verified** (3.01 GB, non-root, round-trip works).
+
 ---
 
 ## Context (for readers new to the project)

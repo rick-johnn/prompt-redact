@@ -12,6 +12,17 @@
 
 <p><strong>Status:</strong> Draft, <strong>updated after architecture-team review</strong> (Petzold, Box, Carmack — full comments in <a href="../../M4_PACKAGING_DISCUSSION.md">M4_PACKAGING_DISCUSSION.md</a>). The review's throughline: <strong>workload is the gate</strong> (every packaging lean is downstream of it), and <strong>measure before deciding</strong> — most size/latency figures here are estimates that one real build + load test turns into facts. <strong>Verification gap:</strong> Docker is unavailable in the design sandbox, so artifacts are authored here and built/verified on a real Docker host. No Dockerfiles are authored until the prerequisites below are answered.</p>
 
+<h2 id="resolved">Decisions resolved (2026-06-08 — workload = interactive chat prompts)</h2>
+<p>The gating question is answered: the workload is <strong>short, interactive prompts in AI chat clients</strong> — <em>not</em> large documents or bulk batches. That collapses most of the open decisions:</p>
+<ul>
+  <li><strong>CPU only — no GPU variant.</strong> Short turns measure ~20 ms p95 on CPU <code>trf</code> (well under the 50 ms target); GPU was only justified by bulk latency.</li>
+  <li><strong>Ship <code>trf</code> only.</strong> The <code>lg</code> variant's case was size + bulk-latency; bulk is gone and <code>trf</code> is already fast enough, leaving only a ~1.5 GB saving for an image that <em>fails the recall gate</em>. <code>lg</code> stays a documented <code>--build-arg</code> escape hatch, not a shipped/tested artifact (so no runtime model-env knob needed).</li>
+  <li><strong>Single synchronous <code>/redact</code> — no async/batch verb</strong> (Box's interface question): correct for a chat turn.</li>
+  <li><strong>Bound large pastes, don't handle them.</strong> A user can still paste a huge prompt; the request size cap (T9) rejects over-limit input with <code>413</code> rather than hanging — set the cap to a sensible chat-prompt limit.</li>
+  <li><strong>Token-map wire contract</strong> stays the M2 decision: flat <code>{token: original}</code>, documented v1 (Box's versioning concern is answered).</li>
+</ul>
+<p>Net: M4 is one CPU <code>trf</code> sidecar image + the Go front-end + compose + the security tests. No GPU, no variants, no batch verb, no model knob.</p>
+
 <h2>Goal (M4 exit)</h2>
 <p><code>docker compose up</code> brings up the front-end + sidecar; both report healthy; the M2 conversation test passes when pointed at the composed stack. Caller-integration docs explain when to call <code>/redact</code> and how to hold the token map.</p>
 
@@ -34,7 +45,7 @@
 </table>
 <p><strong>What the numbers change:</strong></p>
 <ul>
-  <li><strong>Image size is real even CPU-only.</strong> <code>trf</code> = <strong>3.91 GB</strong> <em>with</em> the CPU-only torch wheel — CPU-only is the right default but did <em>not</em> shrink it dramatically (torch + the transformer model are the bulk, not CUDA). The image-size tension stands.</li>
+  <li><strong>Image size is real even CPU-only.</strong> <code>trf</code> = <strong>3.91 GB</strong> single-stage <em>with</em> the CPU-only torch wheel — CPU-only is the right default but did <em>not</em> shrink it dramatically (torch + the transformer model are the bulk, not CUDA). The <strong>multi-stage production image (M4-01) trims this to 3.01 GB</strong> (no build tools/pip cache in the final layer). Still multi-GB; the tension stands but is eased.</li>
   <li><strong>The <code>lg</code> variant, built right, is 2.35 GB.</strong> The naive shared build was 3.67 GB (it installs torch + <code>spacy-transformers</code>, which <code>lg</code> doesn't use). A <em>model-split</em> <code>lg</code> image (no torch/transformers — <a href="../../measure/Dockerfile.lg"><code>measure/Dockerfile.lg</code></a>) is <strong>2.35 GB</strong> — real, and bigger than the ~1–1.5 GB first guessed (lg's word-vector model + the spaCy/SciPy/presidio stack are ~2 GB on their own). So <code>lg</code> saves <strong>~1.5 GB vs <code>trf</code> (3.91 → 2.35)</strong>, a ~40% cut — but both are still multi-GB and need a registry mirror regardless. <strong>Implication:</strong> the <em>size</em> argument for an <code>lg</code> variant is weaker than hoped; its stronger case is <em>latency</em> on bulk inputs, so the variant decision leans even harder on the workload question. M4-01 needs model-specific deps either way (lg ≠ trf).</li>
   <li><strong>Cold start is a non-issue</strong> (~4 s, not tens of seconds) — the readiness worry largely dissolves.</li>
   <li><strong>Interactive latency is fine</strong> (~20 ms); large-document latency (~470 ms) confirms the bulk-workload concern.</li>
@@ -92,7 +103,7 @@
 <h2>Proposed spec breakdown (after the prerequisites)</h2>
 <ol>
   <li><strong>M4-00</strong> — measurement + workload: run <a href="../../measure/"><code>measure/</code></a> on the Docker host, record real numbers, confirm the workload; settle the image / CPU-GPU / interface decisions on facts.</li>
-  <li><strong>M4-01</strong> — sidecar Dockerfile (CPU-only torch; model pinned by hash) + compiled hash-pinned <code>requirements.txt</code>.</li>
+  <li><strong>M4-01</strong> — <em>done (2026-06-08, built &amp; verified on Docker).</em> Multi-stage CPU-only <code>trf</code> sidecar (<a href="../../deploy/sidecar.Dockerfile"><code>deploy/sidecar.Dockerfile</code></a>), non-root (uid 10001); <strong>3.01 GB</strong> image (multi-stage trims the 3.91 GB single-stage build); <code>docker run</code> → <code>/healthz</code> ready ~6 s → <code>/redact</code> + <code>/unredact</code> round-trip works with real <code>trf</code>. Deps version-pinned (<code>requirements.txt</code>); torch from the CPU index; model pinned by release-wheel URL (with download retry). <strong>Remaining T8:</strong> a full <code>--generate-hashes</code> lockfile that also pins the CPU torch wheel.</li>
   <li><strong>M4-02</strong> — front-end Dockerfile (multi-stage, distroless static, <code>--platform</code> pinned).</li>
   <li><strong>M4-03</strong> — <code>docker-compose.yml</code> + readiness wiring + the sidecar-unreachable negative test.</li>
   <li><strong>M4-04</strong> — compose integration test (M2 round-trip) as the CI-green demo caller + caller-integration docs (incl. the &ldquo;token map is the sensitive artifact&rdquo; caller contract).</li>

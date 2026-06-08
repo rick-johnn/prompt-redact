@@ -1,0 +1,14 @@
+# Keep the build context lean (the daemon receives everything not excluded).
+.git
+.venv
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.coverage
+.coverage.*
+htmlcov
+# Go build output (front-end image builds its own)
+frontend/frontend
+# Throwaway measurement scaffolding
+measure/
