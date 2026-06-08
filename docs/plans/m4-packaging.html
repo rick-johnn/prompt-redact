@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — M4 Plan: Deployment / packaging</title>
+</head>
+<body>
+
+<h1>M4 Plan — Deployment / packaging</h1>
+
+<p>Plan for the <a href="../PLAN.html">M4</a> milestone: package the two-process sidecar (Go front-end + Python sidecar) so <code>docker compose up</code> brings up the stack and the M2 multi-turn integration test passes against it.</p>
+
+<p><strong>Status:</strong> Draft / sketch — decisions surfaced below. <strong>Verification gap:</strong> Docker is not available in the design sandbox (no daemon; a torch/<code>trf</code> image is multi-GB), so these artifacts are <em>authored</em> here and <strong>built and verified on a real Docker host</strong> — the same deferral as the hash-pinned <code>requirements.txt</code>. No artifacts are written until &ldquo;build&rdquo; is signalled and the decisions land.</p>
+
+<h2>Goal (M4 exit)</h2>
+<p><code>docker compose up</code> brings up the front-end + sidecar; both report healthy; the M2 conversation test passes when pointed at the composed stack. Caller-integration docs explain when to call <code>/redact</code> and how to hold the token map.</p>
+
+<h2>Scope</h2>
+<h3>In</h3>
+<ul>
+  <li><strong>Sidecar image</strong> — Python + Presidio + the spaCy model, uvicorn entrypoint, model loaded at build (offline at runtime).</li>
+  <li><strong>Front-end image</strong> — multi-stage Go build to a tiny runtime image.</li>
+  <li><strong>compose</strong> — front-end published; sidecar on the internal network / loopback only, never published (T11). Readiness wired so the front-end depends on the sidecar being model-loaded.</li>
+  <li><strong>Hash-pinned <code>requirements.txt</code></strong> — compiled in the build environment (Python 3.11), used by the sidecar image (closes the deferred compile).</li>
+  <li><strong>Caller-integration docs</strong> — the trust boundary (T4), token-map handling, when to call.</li>
+</ul>
+<h3>Out</h3>
+<ul>
+  <li>k8s manifests — the standalone-k8s target is the documented v1 deployment, but compose is the M4 deliverable; manifests can follow.</li>
+  <li>CI pipeline (incl. the memory needed for <code>trf</code> integration tests — see note).</li>
+  <li>GPU image as the default (offered as a documented variant).</li>
+</ul>
+
+<h2 id="decisions">Decisions to make</h2>
+<ol>
+  <li><strong>Model bundling.</strong> How the ~GB <code>en_core_web_trf</code> + torch reach the sidecar image: <em>(a) bake in at build</em> (download during <code>docker build</code>) — no runtime network, reproducible, mirror-able (threat T8); largest image. <em>(b) download at container start</em> — smaller image, but a startup network dependency (at odds with on-prem). <em>(c) volume mount</em> — model managed/mirrored separately. <strong>Lean: (a)</strong> for the on-prem posture.</li>
+  <li><strong>CPU vs GPU default.</strong> CPU base image (broad compatibility; the torch CPU wheel) as the default, with a documented GPU variant for low-latency on large inputs (where <code>trf</code> needs it). <strong>Lean: CPU default + GPU variant.</strong></li>
+  <li><strong>Sidecar base image.</strong> <code>python:3.11-slim</code> vs distroless-python vs a fuller base. <strong>Lean: <code>python:3.11-slim</code></strong> (the model dominates size anyway).</li>
+  <li><strong>Front-end runtime image.</strong> <code>scratch</code> vs distroless static. <strong>Lean: distroless static</strong> (tiny, has CA certs, non-root).</li>
+</ol>
+
+<h2>Components</h2>
+<ul>
+  <li><strong>Sidecar Dockerfile</strong> — <code>python:3.11-slim</code>; install hash-pinned reqs; <code>python -m spacy download en_core_web_trf</code> (or pinned wheel) at build; run <code>uvicorn prompt_redact_service.app:app</code>; HEALTHCHECK on <code>/healthz</code>; bind to the internal network only.</li>
+  <li><strong>Front-end Dockerfile</strong> — <code>golang:1.22</code> build stage → distroless static; runs the proxy; env points <code>PROMPT_REDACT_UPSTREAM</code> at the sidecar service name.</li>
+  <li><strong>compose</strong> — two services; only the front-end port is published; <code>depends_on</code> with a healthcheck condition so traffic isn't routed before the model loads; a demo/caller note for the round-trip.</li>
+</ul>
+
+<h2>Readiness</h2>
+<p>The sidecar's model load takes real time (seconds for <code>lg</code>, longer for <code>trf</code>); <code>/healthz</code> already flips ready only after warmup (M2-01). The compose healthcheck must allow a generous start period so the front-end waits for it.</p>
+
+<h2>Exit criteria</h2>
+<ul>
+  <li><code>docker compose up</code> → both services healthy.</li>
+  <li>The M2 conversation round-trip passes against the front-end's published port.</li>
+  <li>Logs contain no raw identifiers; the sidecar is not reachable from outside the compose network.</li>
+</ul>
+
+<h2>Proposed spec breakdown (once decisions land)</h2>
+<ol>
+  <li><strong>M4-01</strong> — sidecar Dockerfile + compiled hash-pinned <code>requirements.txt</code>.</li>
+  <li><strong>M4-02</strong> — front-end Dockerfile (multi-stage).</li>
+  <li><strong>M4-03</strong> — <code>docker-compose.yml</code> + readiness wiring.</li>
+  <li><strong>M4-04</strong> — compose integration test (M2 round-trip against the stack) + caller-integration docs.</li>
+</ol>
+
+<h2>Note: CI memory for the <code>trf</code> integration tests</h2>
+<p>Running the full Python suite loads the transformer model across several integration fixtures and can exhaust memory on a small runner (observed: OOM in the sandbox). CI for the integration tests needs adequate RAM, or they should be run sharded / in separate processes. Pure (non-integration) tests are unaffected.</p>
+
+</body>
+</html>

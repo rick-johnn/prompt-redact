@@ -2,7 +2,7 @@
 
 An on-prem PII redaction microservice that calling applications invoke explicitly on text they want anonymized. The service exposes `POST /redact` (text → redacted text + token map) and `POST /unredact` (text + token map → rehydrated text). It does **not** proxy LLM calls — the caller decides whether to send redacted text to an LLM, log it, index it, throw it away, or show it back to the user.
 
-> **Status:** **M1 (redactor core) complete** as of 2026-06-07 — the quality gate passes with the default `en_core_web_trf` model. **M2 (redaction service MVP) is current** and built through its multi-turn exit test. See [`docs/PLAN.html`](docs/PLAN.html) for milestones and [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) for the design.
+> **Status:** **M1 (redactor core) and M2 (service MVP) complete** as of 2026-06-07 — the quality gate passes with the default `en_core_web_trf` model, and the full sidecar (Go front-end → Python FastAPI sidecar) is built and tested. **M4 (packaging) is current.** See [`docs/PLAN.html`](docs/PLAN.html) for milestones and [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) for the design.
 >
 > The service shape changed on 2026-05-30 from a transparent OpenAI-compatible proxy to a standalone redaction microservice. See [`docs/decisions/0002-service-shape.html`](docs/decisions/0002-service-shape.html).
 
