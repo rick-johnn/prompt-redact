@@ -17,11 +17,8 @@ for i in $(seq 1 120); do
 done
 curl -s localhost:8080/healthz; echo
 
-echo "== round-trip through the front-end (:8080) =="
-red=$(curl -s -H 'content-type: application/json' \
-  -d '{"text":"Page Dr. John Doe re patient Jane Roe."}' localhost:8080/redact)
-echo "  redact -> $red"
-echo "$red" | grep -q '\[PERSON_1\]' || { echo "  FAIL: expected a redaction token"; exit 1; }
+echo "== multi-turn round-trip via the demo caller (:8080) =="
+python3 examples/demo_caller.py http://localhost:8080
 
 echo "== NEGATIVE: the sidecar must not be reachable from the host =="
 if curl -fs --max-time 3 localhost:8000/healthz >/dev/null 2>&1; then
