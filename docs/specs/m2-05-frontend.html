@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M2-05: Go front-end</title>
+</head>
+<body>
+
+<h1>Spec M2-05 — Go front-end (public shell)</h1>
+
+<p>Fifth M2 spec (<a href="../plans/m2-service.html">plan</a>) and the piece deferred from the MVP. Completes the <a href="../decisions/0001-language-and-topology.html">ADR 0001</a> sidecar: a Go binary is the public-facing service and forwards to the Python sidecar over loopback HTTP. Resolves the two deferred decisions — <strong>Go</strong> for the front-end, <strong>HTTP-over-loopback</strong> for the IPC.</p>
+
+<p>Module: <code>frontend/</code> (Go, stdlib only — no external deps). Tests: <code>frontend/proxy_test.go</code>.</p>
+
+<h2>Decisions resolved (2026-06-07)</h2>
+<ul>
+  <li><strong>Front-end language: Go.</strong> Single static binary, fast HTTP handling, trivial deploy — the conventional choice for a standalone network shell. (TypeScript would have been the pick for a Node-centric adopter.)</li>
+  <li><strong>IPC: HTTP over loopback.</strong> The Python sidecar already speaks HTTP (FastAPI), so the front-end is a reverse proxy to <code>127.0.0.1</code> — no new interface, no codegen, easy to debug. gRPC would have meant adding a parallel gRPC server to the Python side. The IPC stays loopback-only (threat T11); the sidecar is never exposed publicly.</li>
+</ul>
+
+<h2>What it does (and deliberately doesn't)</h2>
+<p>The front-end is intentionally <strong>thin</strong>: a <code>httputil.ReverseProxy</code> to the sidecar, plus an <strong>edge body-size cap</strong> (413 before forwarding — threat T9, keeps oversized input off the NER pass) and <strong>no request-body logging</strong> (threat T2). The authoritative size enforcement, the redaction logic, and the error mapping all stay in the Python sidecar — the front-end does not re-implement them.</p>
+<p><strong>Honest note on value:</strong> because the sidecar already does the heavy lifting, the front-end's benefit is the <em>topology</em> (the model-bearing Python process is internal/loopback-only; a lean Go binary is what's exposed), not raw speed — the NER pass dominates latency, so the Go-vs-Python shell difference is negligible (consistent with ADR 0001's &ldquo;the shell is not the bottleneck&rdquo;).</p>
+
+<h2>Config (env)</h2>
+<pre>
+PROMPT_REDACT_LISTEN          public listen address      (default ":8080")
+PROMPT_REDACT_UPSTREAM        loopback sidecar base URL  (default "http://127.0.0.1:8000")
+PROMPT_REDACT_MAX_BODY_BYTES  edge body-size cap         (default 1000000)
+</pre>
+
+<h2>Public surface (<code>frontend/</code>)</h2>
+<ul>
+  <li><code>newHandler(upstream, maxBytes) (http.Handler, error)</code> — reverse proxy + edge cap; errors on a malformed upstream URL.</li>
+  <li><code>limitBody(next, maxBytes)</code> — 413 on a declared body over the cap (<code>maxBytes &le; 0</code> disables).</li>
+  <li><code>main</code> — reads env config and serves.</li>
+</ul>
+
+<h2>Test plan (<code>frontend/proxy_test.go</code>)</h2>
+<ul>
+  <li>Requests forwarded to the upstream and its response proxied back (via an <code>httptest</code> upstream).</li>
+  <li>Oversized declared body → <code>413</code>, upstream never reached.</li>
+  <li><code>/healthz</code> forwarded.</li>
+  <li>Malformed upstream URL → constructor error.</li>
+</ul>
+
+<h2>Deployment</h2>
+<p>Two processes on one host/pod: the Go front-end (public) and the Python sidecar bound to loopback. Packaging them together (Dockerfile / compose) is <a href="../PLAN.html">M4</a>; this spec delivers the front-end and its tests.</p>
+
+<h2>Definition of done</h2>
+<ul>
+  <li><code>frontend/</code> Go module: reverse proxy to the loopback sidecar + edge size cap; stdlib only.</li>
+  <li><code>gofmt</code>/<code>go vet</code> clean; <code>go test ./...</code> green.</li>
+  <li>Decisions (Go, HTTP-loopback) recorded in ADR 0001 and the M2 plan.</li>
+</ul>
+
+</body>
+</html>

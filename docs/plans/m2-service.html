@@ -49,8 +49,8 @@
 <h2 id="decisions">Decisions (resolved 2026-06-06)</h2>
 <ol>
   <li><strong>Sequencing — Python service first (MVP).</strong> The Python service speaking HTTP is a complete redaction service; M2 ships it as the MVP and adds the Go/TS front-end later. This defers decisions #2 and #3.</li>
-  <li><strong>Front-end language (Go vs TypeScript) — DEFERRED</strong> to the front-end spec (M2-05); not needed for the Python MVP.</li>
-  <li><strong>IPC protocol (HTTP vs gRPC) — DEFERRED</strong> to the front-end spec; not needed until there are two processes.</li>
+  <li><strong>Front-end language (Go vs TypeScript) — Go</strong> (resolved 2026-06-07, M2-05). Single static binary, fast, simple deploy.</li>
+  <li><strong>IPC protocol — HTTP over loopback</strong> (resolved 2026-06-07, M2-05). The sidecar already speaks HTTP, so the front-end is a reverse proxy to <code>127.0.0.1</code>; no second interface. Loopback-only (T11).</li>
   <li><strong>Python web framework — FastAPI.</strong> Request validation + OpenAPI out of the box; rejects malformed bodies early (good for a PII API). Adds <code>pydantic</code> + <code>starlette</code> + <code>uvicorn</code> to the deps.</li>
   <li><strong>Token-map wire contract — flat dict, documented v1.</strong> The wire shape is the in-memory shape, <code>{token: original}</code>, documented as v1. Versioning is added only if a breaking change is ever needed.</li>
   <li><strong><code>/unredact</code> unknown token — strict, mapped to <code>422</code>.</strong> Keep the M1 core's strict behavior (raises <code>UnknownTokenError</code>); the service returns <code>422</code>. An unknown token signals a corrupted/mismatched map and is surfaced loudly. <a href="../ARCHITECTURE.html#api-surface">ARCHITECTURE</a> is updated to match (its prior &ldquo;leave as-is&rdquo; wording is superseded).</li>
@@ -64,9 +64,9 @@
   <li><code>unredact</code>: calls <code>prompt_redact_core.unredact</code>; maps <code>UnknownTokenError</code> to <code>422</code>.</li>
   <li>Request size cap → <code>413</code> (T9); structured logging without bodies (T2/T3).</li>
 </ul>
-<h3>Front-end (Go/TS) — deferred</h3>
+<h3>Front-end (Go) — built (M2-05)</h3>
 <ul>
-  <li>Added in a later spec (M2-05): the fast public shell + loopback IPC client. Because the front-end and the sidecar share the same API contract, it is a thin pass-through. Needs decisions #2 (Go vs TS) and #3 (IPC) first.</li>
+  <li>A Go reverse proxy (<code>frontend/</code>) is the public shell, forwarding to the sidecar over loopback HTTP; adds an edge body-size cap (T9) and logs no bodies (T2). Thin by design — the sidecar keeps the redaction logic, authoritative size enforcement, and error mapping. See <a href="../specs/m2-05-frontend.html">Spec M2-05</a>.</li>
 </ul>
 
 <h2>API surface</h2>
@@ -93,7 +93,7 @@
   <li><strong>M2-02</strong> — <code>/redact</code> + <code>/unredact</code> handlers, flat-v1 wire contract, error mapping (<code>400</code> / <code>422</code> / <code>500</code>).</li>
   <li><strong>M2-03</strong> — request size cap (<code>413</code>, T9) + logging discipline (no bodies, T2/T3).</li>
   <li><strong>M2-04</strong> — multi-turn integration test (cross-turn token stability + round-trip); compose may be pulled forward to run it.</li>
-  <li><strong>M2-05</strong> (later) — Go/TS front-end + loopback IPC; requires decisions #2 and #3.</li>
+  <li><strong>M2-05</strong> &mdash; <em>done.</em> Go front-end (<code>frontend/</code>) + HTTP-over-loopback IPC; edge size cap; tests green.</li>
 </ol>
 
 </body>

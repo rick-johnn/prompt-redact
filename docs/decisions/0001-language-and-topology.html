@@ -146,6 +146,8 @@
 
 <p><strong>Adopt the sidecar topology (Options B/C):</strong> a fast front-end service owns the HTTP surface (<code>/redact</code>, <code>/unredact</code>, <code>/healthz</code>) and calls a <strong>Python sidecar that hosts Presidio</strong> over a loopback-only IPC boundary. The front-end language is narrowed to <strong>Go or TypeScript</strong>; the final pick between the two is deferred to the start of M1 and decided on team familiarity and the surrounding stack.</p>
 
+<p><strong>Resolved 2026-06-07 (in M2-05):</strong> the front-end is <strong>Go</strong>, and the IPC is <strong>HTTP over loopback</strong> (the Python sidecar already speaks HTTP, so the front-end is a reverse proxy to <code>127.0.0.1</code> — no second interface). See <a href="../specs/m2-05-frontend.html">Spec M2-05</a>.</p>
+
 <p>This deliberately selects the multi-language sidecar shape over the &ldquo;honest take&rdquo; lean toward Option A (single full-Python). The trade accepted: two deploy units, two CI pipelines, and a new IPC boundary, in exchange for keeping Presidio (the locked, Python-only engine) behind a lean, fast front-end that fits non-Python-first stacks.</p>
 
 <p><strong>Follow-ups this triggers:</strong></p>

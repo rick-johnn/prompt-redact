@@ -119,6 +119,15 @@ pip install pip-tools
 pip-compile --generate-hashes requirements.in
 ```
 
+**Front-end (Go).** The public shell (`frontend/`) reverse-proxies to the Python sidecar over loopback. It needs Go 1.22+ and has no external dependencies:
+
+```sh
+cd frontend
+go test ./...                                   # run its tests
+go build -o frontend . && \
+  PROMPT_REDACT_UPSTREAM=http://127.0.0.1:8000 ./frontend   # serves on :8080
+```
+
 ## Attribution
 
 `skills/karpathy-guidelines/` is vendored from [`multica-ai/andrej-karpathy-skills`](https://github.com/multica-ai/andrej-karpathy-skills) (MIT). It can alternatively be installed as a Claude Code plugin:

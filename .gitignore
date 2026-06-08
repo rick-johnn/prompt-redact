@@ -9,6 +9,9 @@ __pycache__/
 .coverage.*
 htmlcov/
 
+# Go (M2 front-end)
+/frontend/frontend
+
 # Env / secrets
 .env
 .env.*
