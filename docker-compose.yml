@@ -1,0 +1,29 @@
+# prompt-redact local stack (M4-03): public Go front-end -> internal Python sidecar.
+#   docker compose up --build
+#
+# Topology (ADR 0001): only the front-end is published. The sidecar (with the
+# model) has no host port — it's reachable only on the internal compose network
+# as "sidecar:8000" (threat T11). The front-end waits for the sidecar to be
+# model-loaded (depends_on: service_healthy, using the sidecar image HEALTHCHECK).
+services:
+  sidecar:
+    build:
+      context: .
+      dockerfile: deploy/sidecar.Dockerfile
+    expose:
+      - "8000"        # internal only — NOT published to the host
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "8080:8080"   # the only publicly reachable port
+    environment:
+      PROMPT_REDACT_LISTEN: ":8080"
+      PROMPT_REDACT_UPSTREAM: "http://sidecar:8000"
+      PROMPT_REDACT_MAX_BODY_BYTES: "1000000"
+    depends_on:
+      sidecar:
+        condition: service_healthy
+    restart: unless-stopped
