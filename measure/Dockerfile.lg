@@ -1,0 +1,18 @@
+# THROWAWAY measurement — model-SPLIT lg image: NO torch, NO spacy-transformers.
+# en_core_web_lg is a CNN model that needs neither, so a real lg image omits them
+# (unlike measure/Dockerfile, which installs torch for both models). This is for
+# the true lg image SIZE; the app defaults to trf, so this image won't SERVE
+# without a runtime model env knob (a follow-up) — size only. See measure/README.md.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# No torch, no spacy-transformers — lg uses spaCy's CNN pipeline.
+RUN pip install --no-cache-dir presidio-analyzer spacy fastapi "uvicorn[standard]" \
+ && python -m spacy download en_core_web_lg
+
+COPY prompt_redact_core/ prompt_redact_core/
+COPY prompt_redact_service/ prompt_redact_service/
+
+EXPOSE 8000
+CMD ["uvicorn", "prompt_redact_service.app:app", "--host", "0.0.0.0", "--port", "8000"]
