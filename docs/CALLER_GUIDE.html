@@ -41,6 +41,7 @@ python examples/demo_caller.py # exercises a multi-turn round-trip
   <li><strong>Pass it back on every <code>/redact</code></strong> so a repeated identifier keeps the same token across turns (cross-turn stability — what makes a redacted conversation coherent to a downstream LLM).</li>
   <li><strong>Call <code>/unredact</code></strong> on any token-bearing text (e.g. an LLM reply) to restore the originals for the user.</li>
   <li><strong>⚠️ The token map is the most sensitive object in the system</strong> — it literally maps <code>token → original</code>, so it contains the raw identifiers. Treat it at the same trust level as the raw input: encrypt it at rest, never log it, never ship it to a third party. (See <a href="ARCHITECTURE.html#token-map-handling">token-map handling</a>, threat T6.)</li>
+  <li><strong>Versioning:</strong> the current map is the flat <code>{token: original}</code> shape (v1). Any future incompatible format would be a versioned envelope (<code>{"version": …, …}</code>); v1 has no <code>version</code> key, so you can always tell which shape you hold. (See <a href="ARCHITECTURE.html#token-map-handling">token-map handling</a>.)</li>
 </ul>
 
 <h2>When to call <code>/redact</code></h2>

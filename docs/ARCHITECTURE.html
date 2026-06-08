@@ -168,6 +168,9 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
 <h3>Could the service offer an optional &ldquo;hold and encrypt the map for me&rdquo; mode?</h3>
 <p>Not in v1. Such a mode would reintroduce server-side state, a datastore, key management, and several threat-model rows that <a href="decisions/0002-service-shape.html">ADR 0002</a> deliberately removed. It is a legitimate idea, but it reopens that decision and would require a new ADR weighing it — it will not be added silently.</p>
 
+<h3>How is the token-map format versioned?</h3>
+<p>The v1 wire format <em>is</em> the bare flat dict <code>{token: original}</code>. We deliberately do <strong>not</strong> add a version key inside the map: every key must be a valid <code>[TYPE_N]</code> token (the core validates this), so a <code>_v</code>/<code>version</code> key would be rejected as malformed. The flat shape is therefore v1 by definition. If an incompatible shape is ever needed, v2 would be a wrapping <strong>envelope</strong> (e.g. <code>{"version": 2, "map": {…}}</code>) — distinguishable from v1 by the presence of a top-level <code>version</code> key (v1 has none), so a consumer can always tell which shape it holds without a discriminator being retrofitted into v1.</p>
+
 <h2>Token format</h2>
 
 <p><code>[&lt;ENTITY_TYPE&gt;_&lt;N&gt;]</code> — e.g. <code>[PERSON_1]</code>, <code>[PHONE_NUMBER_2]</code>, <code>[DATE_TIME_1]</code>.</p>
