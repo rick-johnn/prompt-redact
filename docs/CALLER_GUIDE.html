@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Caller integration guide</title>
+</head>
+<body>
+
+<h1>Caller integration guide</h1>
+
+<p>How an application integrates with prompt-redact. The service redacts text on demand; <strong>your application is the orchestrator</strong> — it decides when to call, what to do with the redacted text, and it owns the token map. See <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> for the deeper design and <a href="../examples/demo_caller.py"><code>examples/demo_caller.py</code></a> for a runnable multi-turn example.</p>
+
+<h2>Run it</h2>
+<pre>
+docker compose up --build      # front-end on :8080, sidecar internal-only
+python examples/demo_caller.py # exercises a multi-turn round-trip
+</pre>
+
+<h2>API</h2>
+<ul>
+  <li><code>POST /redact</code> — <code>{text, token_map?, language?}</code> → <code>{redacted_text, token_map}</code></li>
+  <li><code>POST /unredact</code> — <code>{text, token_map}</code> → <code>{text}</code></li>
+  <li><code>GET /healthz</code> — <code>200 {"status":"ok"}</code> once the model is loaded, else <code>503</code></li>
+</ul>
+
+<h3>Errors</h3>
+<table>
+  <thead><tr><th>Status</th><th>When</th></tr></thead>
+  <tbody>
+    <tr><td><code>400</code></td><td>malformed body; input contains a redaction-token-shaped substring (T5); invalid token map; unsupported language</td></tr>
+    <tr><td><code>413</code></td><td>request body over the size cap (set <code>PROMPT_REDACT_MAX_BODY_BYTES</code>)</td></tr>
+    <tr><td><code>422</code></td><td><code>/unredact</code> got a token absent from the map (the text and map are out of sync)</td></tr>
+    <tr><td><code>503</code></td><td>service not ready (model still loading)</td></tr>
+    <tr><td><code>500</code></td><td>unexpected engine failure (generic; never echoes your input)</td></tr>
+  </tbody>
+</table>
+
+<h2>The token map — your responsibility</h2>
+<ul>
+  <li><strong>Hold it for the conversation.</strong> <code>/redact</code> returns the map; store it for the lifetime of the conversation/session.</li>
+  <li><strong>Pass it back on every <code>/redact</code></strong> so a repeated identifier keeps the same token across turns (cross-turn stability — what makes a redacted conversation coherent to a downstream LLM).</li>
+  <li><strong>Call <code>/unredact</code></strong> on any token-bearing text (e.g. an LLM reply) to restore the originals for the user.</li>
+  <li><strong>⚠️ The token map is the most sensitive object in the system</strong> — it literally maps <code>token → original</code>, so it contains the raw identifiers. Treat it at the same trust level as the raw input: encrypt it at rest, never log it, never ship it to a third party. (See <a href="ARCHITECTURE.html#token-map-handling">token-map handling</a>, threat T6.)</li>
+</ul>
+
+<h2>When to call <code>/redact</code></h2>
+<p>Call it before any downstream use of text that may contain identifiers — sending to an LLM (especially a non-approved one), but also logging, analytics, evaluation, indexing. The value is keeping identifiers out of <em>every</em> downstream system, not just the LLM.</p>
+
+<h2>The trust boundary you own (threat T4)</h2>
+<p>The service only acts when called. <strong>It cannot enforce its own use</strong> — if your app sends raw text to an LLM without calling <code>/redact</code> first, identifiers leak and the service can't prevent it. This is the caller's contract to honor: code-review every path from user input to a downstream sink, and consider a separate egress control as defense-in-depth.</p>
+
+<h2>Input size</h2>
+<p>prompt-redact targets short, interactive prompts. Large inputs are slower (the NER pass scales with length) and are <strong>bounded, not handled</strong>: a body over the cap is rejected with <code>413</code> rather than hanging. Keep per-call text to chat-prompt size.</p>
+
+<h2>Multi-turn pattern (see <a href="../examples/demo_caller.py">demo_caller.py</a>)</h2>
+<pre>
+map = {}
+# turn 1
+res = POST /redact {text: turn1}              ; map = res.token_map
+send res.redacted_text to the LLM (or log/index/…)
+# turn 2 — pass the map back
+res = POST /redact {text: turn2, token_map: map} ; map = res.token_map   # same id → same token
+# rehydrate a reply
+user_text = POST /unredact {text: llm_reply, token_map: map}
+</pre>
+
+</body>
+</html>

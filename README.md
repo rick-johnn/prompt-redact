@@ -83,6 +83,7 @@ Project documentation under `docs/` is authored in HTML, not markdown (see [`CLA
 
 - [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) — components, API surface, data flow, token-map handling (FAQ), threat model, redaction quality targets, deployment-target sketch, alternatives, open questions
 - [`docs/PLAN.html`](docs/PLAN.html) — milestones from M0 (design freeze) through MVP and beyond
+- [`docs/CALLER_GUIDE.html`](docs/CALLER_GUIDE.html) — how to integrate: API, error codes, token-map handling, the trust boundary, multi-turn pattern
 - [`docs/decisions/0001-language-and-topology.html`](docs/decisions/0001-language-and-topology.html) — ADR (status: Accepted) for the language and sidecar-topology decision
 - [`docs/decisions/0002-service-shape.html`](docs/decisions/0002-service-shape.html) — ADR (status: Accepted) for the pivot from transparent LLM proxy to redaction microservice
 - [`docs/research/ner-engines-deep-dive.html`](docs/research/ner-engines-deep-dive.html) — research note on spaCy, Presidio, ONNX, and alternative engines; informs ADR 0001
