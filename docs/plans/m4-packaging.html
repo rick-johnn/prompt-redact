@@ -21,6 +21,25 @@
   <li><strong>Measure, don't estimate.</strong> Run the throwaway build in <a href="../../measure/"><code>measure/</code></a> on the Docker host to replace the size/latency tildes with real numbers — in particular build with the <strong>CPU-only torch wheel</strong> (most of the 1–2 GB is CUDA the CPU path never runs; this likely deflates the image-size tension <em>and</em> the CI-RAM problem at once). Capture real image size, cold-start, and p95/p99 latency on the actual deploy hardware.</li>
 </ol>
 
+<h2 id="measured">Measured (2026-06-07 · Docker Desktop · x86_64 · CPU-only torch)</h2>
+<p>From <a href="../../measure/"><code>measure/</code></a> — real numbers replacing the estimates:</p>
+<table>
+  <thead><tr><th>Metric</th><th>Estimate</th><th>Measured</th></tr></thead>
+  <tbody>
+    <tr><td>Sidecar <code>trf</code> image (CPU-only torch)</td><td>~3–4 GB</td><td><strong>3.91 GB</strong></td></tr>
+    <tr><td>Cold start (model load → <code>/healthz</code> ready)</td><td>tens of seconds</td><td><strong>4.1 s</strong></td></tr>
+    <tr><td>Short-message <code>/redact</code> latency</td><td>~30 ms</td><td><strong>~20 ms</strong></td></tr>
+    <tr><td>~500-token <code>/redact</code> latency</td><td>~437 ms</td><td><strong>~470 ms</strong></td></tr>
+  </tbody>
+</table>
+<p><strong>What the numbers change:</strong></p>
+<ul>
+  <li><strong>Image size is real even CPU-only.</strong> <code>trf</code> = <strong>3.91 GB</strong> <em>with</em> the CPU-only torch wheel — CPU-only is the right default but did <em>not</em> shrink it dramatically (torch + the transformer model are the bulk, not CUDA). The image-size tension stands.</li>
+  <li><strong>The <code>lg</code> number isn't fair yet.</strong> The shared measurement Dockerfile installs torch + <code>spacy-transformers</code> for both models, so <code>lg</code> came out <strong>3.67 GB</strong> — inflated by deps <code>lg</code> doesn't use (it's a CNN model; no torch). A properly built <code>lg</code> image drops torch + transformers and should be ~1–1.5 GB. <strong>Implication for M4-01:</strong> the dependency set must be <em>model-specific</em> (lg ≠ trf deps), and that's also what makes the <code>lg</code> variant actually worth shipping.</li>
+  <li><strong>Cold start is a non-issue</strong> (~4 s, not tens of seconds) — the readiness worry largely dissolves.</li>
+  <li><strong>Interactive latency is fine</strong> (~20 ms); large-document latency (~470 ms) confirms the bulk-workload concern.</li>
+</ul>
+
 <h2>Scope</h2>
 <h3>In</h3>
 <ul>
@@ -60,7 +79,7 @@
 </ul>
 
 <h2>Readiness</h2>
-<p>The sidecar's model load takes tens of seconds (<code>trf</code>); <code>/healthz</code> already flips ready only after warmup (M2-01). Compose must gate the front-end on <code>depends_on: condition: service_healthy</code> — a generous <code>start_period</code> alone only delays failure-counting, it doesn't hold traffic. <strong>Define the front-end's behavior during the warmup window</strong> (fast-fail with a clear <code>503</code> rather than hang or queue), since every crash-loop, rolling deploy, and OOM-kill pays the load cost again.</p>
+<p>The sidecar's model load takes <strong>~4 s</strong> (<code>trf</code>, measured 2026-06-07 — far less than the feared tens of seconds); <code>/healthz</code> already flips ready only after warmup (M2-01). Compose must gate the front-end on <code>depends_on: condition: service_healthy</code> — a generous <code>start_period</code> alone only delays failure-counting, it doesn't hold traffic. <strong>Define the front-end's behavior during the warmup window</strong> (fast-fail with a clear <code>503</code> rather than hang or queue), since every crash-loop, rolling deploy, and OOM-kill pays the load cost again.</p>
 
 <h2>Exit criteria</h2>
 <ul>

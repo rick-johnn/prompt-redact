@@ -64,6 +64,8 @@
   </tbody>
 </table>
 <p>Leakage 0.19. Gate <strong>FAIL</strong> (this row is the <code>en_core_web_lg</code> result). Reading: format/checksum types and city-level LOCATION are solid; PERSON/DATE_TIME/PHONE_NUMBER fall short on lg.</p>
+<p><strong>Footprint / latency (measured 2026-06-07, Docker Desktop, x86_64, CPU-only torch):</strong> sidecar <code>trf</code> image <strong>3.91 GB</strong>; cold start <strong>4.1 s</strong>; <code>/redact</code> latency <strong>~20 ms</strong> (short message) / <strong>~470 ms</strong> (500 tokens). CPU-only torch did not meaningfully shrink the image. See the <a href="../plans/m4-packaging.html#measured">M4 measured numbers</a>.</p>
+
 <p><strong>Update (2026-06-07) — <code>en_core_web_trf</code> measured and adopted as the default.</strong> The transformer passes every per-type target: PERSON / DATE_TIME / PHONE_NUMBER &rarr; <strong>1.000</strong>, and the report-only context IDs MRN/RX rise to ~1.0; leakage drops to 0.003; <strong>gate PASS</strong>. Cost: latency (short-msg p95 ~30 ms — within target; ~500-token ~437 ms on CPU) and image size (torch). So the date/phone recognizer work the lg baseline implied is <em>no longer needed</em>; <code>en_core_web_lg</code> remains a fast/low-recall alternative. Street-level addresses are still out of the corpus — a known gap needing a dedicated recognizer.</p>
 
 <h2>Definition of done</h2>

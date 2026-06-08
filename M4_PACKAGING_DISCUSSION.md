@@ -59,6 +59,11 @@ Adopting `trf` as the default has a packaging consequence we need to confront. A
 
 So the **default artifact is a 3–4 GB image**. For on-prem / air-gapped adopters mirroring it into an internal registry (threat **T8**), that's a real cost: pull time, storage, rebuild time. This is the decision that drives most of the others.
 
+> ✅ **MEASURED (2026-06-07, Docker Desktop, x86_64, CPU-only torch)** — replacing the tildes (per Petzold/Carmack):
+> - **`trf` sidecar = 3.91 GB.** CPU-only torch did **not** deflate it — torch + the transformer model are the bulk, not CUDA. Carmack's hypothesis doesn't hold here; the image-size tension is real.
+> - **`lg` build = 3.67 GB — but that number is not fair.** The shared measurement Dockerfile installs torch + `spacy-transformers` for both models, and `lg` (a CNN model) needs neither. A properly built `lg` image drops those and should land ~1–1.5 GB. So `lg` *is* a real size win — but only with a **model-specific dependency set** (an M4-01 requirement, not a one-line build-arg).
+> - **Cold start = 4.1 s** (not "tens of seconds"). **Latency:** ~20 ms short / ~470 ms for 500 tokens. The bulk-input concern is confirmed; the readiness concern largely dissolves.
+
 > 💬 **[Carmack]:** Most of those 1–2 GB are torch's CUDA libraries, which on a CPU-default deployment (your own lean, item 3) you will never execute. Install the CPU-only torch wheel (`torch ... --index-url .../cpu`) and the image drops by something like a gigabyte before you've made a single hard tradeoff. That's a measurement to take *before* agonizing over `trf`-vs-`lg`. You may find the "central tension" is half as tense as the table implies.
 
 > 💬 **[Petzold]:** "Approx size" / "~1–2 GB" / "~3–4 GB" — these are guesses presented in a decision table. The sandbox can't build images, fine, but somebody can run `docker images` on the Docker Desktop host *today* on a throwaway build and replace every one of these tildes with a real number. Don't hold a design meeting on estimated megabytes when the actual bytes are one build away.
