@@ -1,0 +1,20 @@
+{"domain": "clinical", "id": "rw-01", "spans": [{"end": 11, "start": 3, "type": "PERSON", "value": "Jhon Doe"}], "text": "pt Jhon Doe seen in clinic today"}
+{"domain": "generic", "id": "rw-02", "spans": [{"end": 17, "start": 8, "type": "PERSON", "value": "bob smith"}, {"end": 32, "start": 21, "type": "EMAIL_ADDRESS", "value": "bob@acme.io"}], "text": "Contact bob smith at bob@acme.io please"}
+{"domain": "clinical", "id": "rw-03", "spans": [{"end": 11, "start": 4, "type": "PERSON", "value": "O'Brien"}, {"end": 33, "start": 28, "type": "MRN", "value": "A1234"}], "text": "Dr. O'Brien paged about MRN A1234"}
+{"domain": "clinical", "id": "rw-04", "spans": [{"end": 15, "start": 0, "type": "PERSON", "value": "Xóchitl Ramírez"}, {"end": 33, "start": 21, "type": "DATE_TIME", "value": "Jan 3rd 1990"}], "text": "Xóchitl Ramírez, DOB Jan 3rd 1990"}
+{"domain": "generic", "id": "rw-05", "spans": [{"end": 17, "start": 5, "type": "PHONE_NUMBER", "value": "555.123.4567"}, {"end": 38, "start": 21, "type": "PHONE_NUMBER", "value": "+1 (212) 555-0100"}], "text": "call 555.123.4567 or +1 (212) 555-0100"}
+{"domain": "finance", "id": "rw-06", "spans": [{"end": 15, "start": 4, "type": "US_SSN", "value": "123 45 6789"}], "text": "SSN 123 45 6789 on file"}
+{"domain": "pbm", "id": "rw-07", "spans": [{"end": 19, "start": 10, "type": "MEMBER_ID", "value": "Q12345678"}, {"end": 31, "start": 24, "type": "RX_NUMBER", "value": "7788990"}], "text": "Member ID Q12345678, Rx 7788990"}
+{"domain": "generic", "id": "rw-08", "spans": [{"end": 5, "start": 0, "type": "PERSON", "value": "April"}, {"end": 19, "start": 16, "type": "PERSON", "value": "May"}], "text": "April scheduled May for next week"}
+{"domain": "generic", "id": "rw-09", "spans": [{"end": 36, "start": 17, "type": "LOCATION", "value": "12 Baker St, London"}], "text": "patient lives at 12 Baker St, London"}
+{"domain": "clinical", "id": "rw-10", "spans": [{"end": 23, "start": 13, "type": "NPI", "value": "1245319599"}], "text": "Provider NPI 1245319599 ordered labs"}
+{"domain": "finance", "id": "rw-11", "spans": [{"end": 21, "start": 5, "type": "CREDIT_CARD", "value": "4111111111111111"}], "text": "card 4111111111111111 on account"}
+{"domain": "generic", "id": "rw-12", "spans": [{"end": 26, "start": 6, "type": "EMAIL_ADDRESS", "value": "JANE.DOE@EXAMPLE.COM"}], "text": "email JANE.DOE@EXAMPLE.COM today"}
+{"domain": "clinical", "id": "rw-13", "spans": [{"end": 13, "start": 4, "type": "DEA", "value": "bf1234563"}], "text": "DEA bf1234563 on the script"}
+{"domain": "generic", "id": "rw-14", "spans": [{"end": 29, "start": 6, "type": "EMAIL_ADDRESS", "value": "jane[at]example[dot]com"}], "text": "reach jane[at]example[dot]com"}
+{"domain": "generic", "id": "rw-15", "spans": [], "text": "no identifiers in this sentence"}
+{"domain": "clinical", "id": "rw-16", "spans": [{"end": 12, "start": 6, "type": "PERSON", "value": "García"}], "text": "Señor García will follow up"}
+{"domain": "generic", "id": "rw-17", "spans": [{"end": 23, "start": 10, "type": "PHONE_NUMBER", "value": "(650)555-1234"}], "text": "txt me at (650)555-1234"}
+{"domain": "clinical", "id": "rw-18", "spans": [{"end": 18, "start": 8, "type": "PERSON", "value": "John Smith"}, {"end": 38, "start": 26, "type": "PHONE_NUMBER", "value": "212-555-0100"}], "text": "Patient John Smith, phone 212-555-0100"}
+{"domain": "generic", "id": "rw-19", "spans": [{"end": 17, "start": 5, "type": "PERSON", "value": "Nguyen Van A"}], "text": "from Nguyen Van A in HR"}
+{"domain": "clinical", "id": "rw-20", "spans": [], "text": "ref number 9876543210 not an id"}

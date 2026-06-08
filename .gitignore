@@ -12,6 +12,9 @@ htmlcov/
 # Go (M2 front-end)
 /frontend/frontend
 
+# Real (non-synthetic) eval corpora — may contain real PII; never commit.
+evals/corpus/real/
+
 # Env / secrets
 .env
 .env.*

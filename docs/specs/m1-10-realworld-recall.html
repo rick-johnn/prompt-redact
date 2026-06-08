@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>prompt-redact — Spec M1-10: Real-world / independent recall</title>
+</head>
+<body>
+
+<h1>Spec M1-10 — Real-world / independent recall</h1>
+
+<p>Follow-up to the <a href="m1-08-eval-harness.html">M1-08</a> synthetic gate, prompted by the architecture review: the synthetic corpus and the recognizers <em>share authorship</em>, so its 1.000 recall proves the pipeline is consistent and regression-free but says little about real-world recall. This adds an <strong>independent-corpus harness</strong> that measures the analyzer against externally-authored, messy/adversarial data.</p>
+
+<p>Module: <code>evals/realworld.py</code>. Sample: <code>evals/corpus/realworld_sample.jsonl</code>. Tests: <code>tests/test_realworld.py</code>.</p>
+
+<h2>How it differs from the gate</h2>
+<ul>
+  <li><strong>Loader, not generator.</strong> It reads an external JSONL corpus (same <code>Example</code> format as <a href="m1-07-eval-corpus.html">M1-07</a>) authored independently of the recognizers — breaking the test/code coupling.</li>
+  <li><strong>Report-only.</strong> Real-world recall is informational, not a pass/fail gate — it never fails a build. It reuses the exact scoring (<code>run_eval.evaluate</code> / <code>metrics</code>); only the corpus source differs.</li>
+  <li><strong>PII boundary.</strong> A real hand-labeled corpus may contain real identifiers — keep such files OUT of the repo (gitignored <code>evals/corpus/real/</code>); only the synthetic, adversarial sample is committed.</li>
+</ul>
+
+<h2>The committed sample</h2>
+<p>A hand-authored, deliberately messy/adversarial <em>synthetic</em> corpus (20 examples, 25 gold spans, 2 clean) — written to be realistic and <em>hard</em>, not to match the detectors: misspelled / lowercase / non-Western / accented / month-like names, odd phone formats, space-separated SSN, full street addresses, an obfuscated email, no-context MRN / member / Rx IDs, valid NPI/DEA/credit-card, plus a non-PII 10-digit number. It still shares one author with the code, so it is a <em>step toward</em> independence, not the full thing — a truly independent number needs a corpus hand-labeled by someone who never saw the recognizers.</p>
+
+<h2>First measured result (<code>trf</code>, 2026-06-08)</h2>
+<table>
+  <thead><tr><th>Type</th><th>Recall</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>PERSON (9)</td><td>1.000</td><td>caught all — incl. misspelled, lowercase, non-Western, accented, month-names. Reassuring.</td></tr>
+    <tr><td>PHONE_NUMBER (4)</td><td>1.000</td><td>incl. odd formats</td></tr>
+    <tr><td>NPI / DEA / CREDIT_CARD</td><td>1.000</td><td>checksum types solid</td></tr>
+    <tr><td>DATE_TIME (1)</td><td>1.000 / prec 0.50</td><td>over-detects (precision)</td></tr>
+    <tr><td><strong>EMAIL_ADDRESS (3)</strong></td><td><strong>0.667</strong></td><td>missed the obfuscated <code>jane[at]example[dot]com</code></td></tr>
+    <tr><td><strong>US_SSN (1)</strong></td><td><strong>0.000</strong></td><td>missed space-separated <code>123 45 6789</code> (recognizer expects dashes)</td></tr>
+    <tr><td><strong>LOCATION (1)</strong></td><td><strong>0.000</strong></td><td>missed full street address (catches city only)</td></tr>
+    <tr><td>MRN / MEMBER_ID / RX (report-only)</td><td>1.000</td><td>caught incidentally by NER despite no recognizer (small n)</td></tr>
+  </tbody>
+</table>
+<p>Leakage 0.15 (3/20). <strong>Reading:</strong> the synthetic gate's uniform 1.000 was optimistic. On adversarial input, real gaps surface — obfuscated emails, non-standard SSN spacing, street-level addresses — while PERSON proves robust. <strong>Caveat: small n</strong> (several types have a single example), so these are illustrative, not statistically robust; the value is in the <em>gaps surfaced</em>, not the exact fractions.</p>
+
+<h2>Usage</h2>
+<pre>
+python -m evals.realworld &lt;corpus.jsonl&gt; [spacy_model]
+# e.g. the committed adversarial sample:
+python -m evals.realworld evals/corpus/realworld_sample.jsonl
+</pre>
+
+<h2>Next</h2>
+<p>Replace/augment the sample with a corpus hand-labeled by someone who never saw the recognizers (kept in the gitignored <code>evals/corpus/real/</code> if it contains real data), and grow per-type counts so the fractions become statistically meaningful. That number is the product's true quality.</p>
+
+</body>
+</html>
