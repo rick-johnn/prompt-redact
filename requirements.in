@@ -1,38 +1,17 @@
-# Direct dependencies for prompt-redact (Spec M1-09).
+# Compile input for the hash-pinned runtime lockfile (requirements.txt) — threat T8.
 #
-# This is the SOURCE list. The reproducible, fully-pinned install is
-# requirements.txt, produced WITH HASHES via:
+# Regenerate (in a Python 3.11 environment) with:
+#   pip install pip-tools
+#   pip-compile --generate-hashes --output-file=requirements.txt requirements.in
 #
-#     pip-compile --generate-hashes requirements.in
-#
-# Run that on a networked machine and commit the result. Hash-pinning every
-# transitive dependency is the threat-T8 (supply-chain) mitigation; until the
-# file can be compiled with hashes it is intentionally not committed.
+# torch is pinned to the CPU build from the PyTorch CPU index, so the image stays
+# CPU-only and the lockfile matches exactly what the sidecar installs. Test-only
+# deps (pytest, httpx) live in requirements-dev.in, not in this runtime lock.
+--extra-index-url https://download.pytorch.org/whl/cpu
 
-# --- runtime ---
-presidio-analyzer>=2.2,<3
-spacy>=3.7,<4
-spacy-transformers>=1.3,<2   # for the default transformer NER model (pulls torch)
-
-# service (M2): FastAPI app + ASGI server
-fastapi>=0.110,<1
-uvicorn[standard]>=0.29,<1
-
-# The analyzer DEFAULTS to the TRANSFORMER model en_core_web_trf — required to
-# meet the per-type recall targets (it lifts PERSON/DATE/PHONE to ~1.0). It pulls
-# torch and is large/slower on CPU; en_core_web_lg is the faster, lower-recall
-# alternative (AnalyzerConfig(spacy_model="en_core_web_lg")). Models aren't on
-# PyPI; install with:
-#
-#     python -m spacy download en_core_web_trf      # default
-#     python -m spacy download en_core_web_lg       # fast alternative
-#
-# For a pinned / offline install (threat T8 — mirror the artifact inside the
-# trust boundary), add the release wheel here, aligned to the resolved spaCy
-# version, e.g.:
-#
-#     en_core_web_trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl
-
-# --- test ---
-pytest>=8,<9
-httpx>=0.27,<1   # required by fastapi.testclient
+presidio-analyzer==2.2.362
+spacy==3.8.14
+spacy-transformers==1.4.0
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
+torch==2.12.0+cpu

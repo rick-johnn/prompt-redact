@@ -7,7 +7,6 @@
 # trf-only (the recall bar). lg is a documented --build-arg escape hatch, not a
 # shipped variant.
 ARG PYTHON_VERSION=3.11
-ARG TORCH_VERSION=2.12.0
 ARG TRF_MODEL_WHEEL=https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl
 
 # --- builder: deps + model into a venv ---
@@ -16,14 +15,11 @@ ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# CPU-only torch FIRST, from the CPU wheel index (avoids the CUDA libraries a CPU
-# deployment never runs). spacy-transformers then reuses this pre-installed torch.
-ARG TORCH_VERSION
-RUN pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
-
-# The rest of the pinned runtime deps (from PyPI; torch already satisfied).
+# Hash-pinned runtime deps, incl. the CPU torch wheel — requirements.txt carries
+# the PyTorch CPU --extra-index-url and torch==X+cpu, so the image stays CPU-only.
+# --require-hashes verifies every wheel against the lockfile (threat T8).
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --require-hashes -r requirements.txt
 
 # The spaCy transformer model, pinned by release-wheel URL. Retry — the large
 # wheel occasionally 504s from GitHub's release CDN; verify the import after.

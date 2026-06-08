@@ -2,7 +2,7 @@
 
 An on-prem PII redaction microservice that calling applications invoke explicitly on text they want anonymized. The service exposes `POST /redact` (text → redacted text + token map) and `POST /unredact` (text + token map → rehydrated text). It does **not** proxy LLM calls — the caller decides whether to send redacted text to an LLM, log it, index it, throw it away, or show it back to the user.
 
-> **Status:** **M1 (redactor core) and M2 (service MVP) complete** as of 2026-06-07 — the quality gate passes with the default `en_core_web_trf` model, and the full sidecar (Go front-end → Python FastAPI sidecar) is built and tested. **M4 (packaging) is current.** See [`docs/PLAN.html`](docs/PLAN.html) for milestones and [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) for the design.
+> **Status:** **M1, M2, and M4 complete** (as of 2026-06-08). The redactor core passes its quality gate (default `en_core_web_trf`), the full sidecar (Go front-end → Python FastAPI sidecar) is built and tested, and the stack is packaged: **`docker compose up`** brings up the front-end + sidecar with a hash-pinned, CPU-only image. See [`docs/PLAN.html`](docs/PLAN.html) for milestones, [`docs/CALLER_GUIDE.html`](docs/CALLER_GUIDE.html) to integrate, and [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) for the design.
 >
 > The service shape changed on 2026-05-30 from a transparent OpenAI-compatible proxy to a standalone redaction microservice. See [`docs/decisions/0002-service-shape.html`](docs/decisions/0002-service-shape.html).
 
@@ -96,8 +96,9 @@ Requires Python 3.11+. The redaction core (`prompt_redact_core/`) and the eval c
 
 ```sh
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.in          # or requirements.txt once it is compiled (below)
-python -m spacy download en_core_web_lg  # the NER model (~560 MB)
+pip install -r requirements.txt          # hash-pinned runtime deps (incl. CPU torch)
+pip install -r requirements-dev.in       # test-only deps (pytest, httpx)
+python -m spacy download en_core_web_trf # the default NER model
 ```
 
 Run the tests — integration tests that need Presidio/the model **auto-skip** if it isn't installed, so the pure logic is testable with no ML stack:
@@ -113,11 +114,11 @@ python -m evals.run_eval            # defaults: 50 examples/template, seed 0
 python -m evals.run_eval 500 0      # larger corpus for tighter estimates
 ```
 
-For a reproducible, hash-pinned install (recommended for any deployment — threat T8), compile `requirements.txt` from `requirements.in` on a networked machine and commit it:
+`requirements.txt` is the committed **hash-pinned** lockfile (threat T8), compiled from `requirements.in` and including the CPU torch wheel; the sidecar image installs it with `--require-hashes`. Regenerate it (in a Python 3.11 env) with:
 
 ```sh
 pip install pip-tools
-pip-compile --generate-hashes requirements.in
+pip-compile --generate-hashes --output-file=requirements.txt requirements.in
 ```
 
 **Front-end (Go).** The public shell (`frontend/`) reverse-proxies to the Python sidecar over loopback. It needs Go 1.22+ and has no external dependencies:
