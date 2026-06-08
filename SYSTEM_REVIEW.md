@@ -95,20 +95,25 @@ Importing the package needs no ML stack; Presidio/torch load lazily only when an
 
 ---
 
-## 5. Redaction quality (measured, not assumed)
+## 5. Redaction quality (measured — read the caveats first)
 
-Per-mechanism recall **targets**, and the **measured** gate result with the default `trf` model (synthetic corpus, real run 2026-06-07):
+**Before the numbers, the two caveats that bound what they mean** (deliberately placed *above* the table so they travel with it):
 
-| Tier | Types | Target | Measured (`trf`) |
+1. **The numbers are corpus-relative, not a production guarantee.** All figures are recall **against the synthetic corpus** — a *regression gate*. The corpus is self-authored and contains exactly the identifier shapes the detectors target, so a high score proves the pipeline is consistent and regression-free; it says little about real-world recall on messy/adversarial input, which is **currently unmeasured**. (The review's top finding: running against a few hundred realistically-messy or independently hand-labeled examples is the single highest-value next step — *that* number is the product.)
+2. **Free-text identifiers leak at an accepted rate.** The ≤ 1/10,000 end-to-end leakage bar was **retired as a gate** (reported only; bounded by the weakest gated type). Names and places **will leak** at some rate — for a chat workload where names dominate, that residual *is* the product's true quality, and deployments needing more must add compensating controls. This must be communicated as loudly as the table.
+
+With those firmly in mind — the per-mechanism **targets** and the **measured** gate result (default `trf`, synthetic corpus, 2026-06-07):
+
+| Tier | Types | Target | Measured (`trf`)* |
 |---|---|---|---|
-| Checksum/format | US_SSN, CREDIT_CARD, NPI, DEA, EMAIL_ADDRESS | ≥ 0.99 | 1.000 ✅ |
-| Structured pattern | PHONE_NUMBER, DATE_TIME | ≥ 0.95 | 1.000 ✅ |
-| Free-text NER | PERSON, LOCATION | ≥ 0.97 | 1.000 ✅ |
+| Checksum/format | US_SSN, CREDIT_CARD, NPI, DEA, EMAIL_ADDRESS | ≥ 0.99 | 1.000 |
+| Structured pattern | PHONE_NUMBER, DATE_TIME | ≥ 0.95 | 1.000 |
+| Free-text NER | PERSON, LOCATION | ≥ 0.97 | 1.000 |
 | Context-only ID | MRN, MEMBER_ID, RX_NUMBER | report-only | reported, not gated |
 
-Gate **PASSES** with `trf`; leakage 0.003 on the corpus. With `en_core_web_lg` the gate **fails** (PERSON 0.96, DATE 0.90, PHONE 0.88) — which is why `trf` is the default.
+<sub>*corpus-relative, per caveat 1 — not a real-world figure.</sub>
 
-**Two standing caveats (important for review):** (1) all numbers are recall **against the synthetic corpus** — a regression gate, **not a production guarantee**; real-world recall depends on how well the corpus mirrors real inputs. (2) The ≤ 1/10,000 end-to-end leakage bar was **retired as a gate** (reported only; bounded by the weakest gated type) — free-text identifiers (names/places) will leak at some rate, an accepted residual that deployments needing more must offset with compensating controls.
+Gate **PASSES** with `trf` (leakage 0.003 on the corpus). With `en_core_web_lg` it **fails** (PERSON 0.96, DATE 0.90, PHONE 0.88) — hence `trf` is the default.
 
 ---
 

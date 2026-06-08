@@ -1,9 +1,22 @@
 """Typed errors raised by the redactor core.
 
-Every error the library raises derives from ``RedactError`` so callers (and the
-future M2 HTTP layer) can catch the whole family with one ``except`` and map it
-to a ``400``. Later specs extend this module — e.g. the T5 token-shaped-input
-guard (M1-02) and the unredact collision check (M1-03).
+Every error the library raises derives from ``RedactError`` so callers can catch
+the whole family with one ``except``.
+
+Error -> meaning -> HTTP status. The status column is the mapping the M2 service
+(``prompt_redact_service``) applies; it is documented here so a *direct,
+non-HTTP* consumer of this library has the same error-to-meaning contract without
+reverse-engineering the service layer. The library itself is transport-agnostic.
+
+    RedactError              base of the family (catch-all)
+    InvalidEntityTypeError   entity type is not ``[A-Z][A-Z_]*``        -> 400
+    MalformedTokenMapError   a map key is not a valid token, or one
+                             original is reachable from two tokens      -> 400
+    OverlappingSpansError    two replacement spans overlap              -> 400
+    TokenShapedInputError    redact input already contains a ``[TYPE_N]``
+                             token-shaped substring (threat T5)         -> 400
+    UnknownTokenError        unredact: a token in the text is absent
+                             from the map (text and map out of sync)    -> 422
 """
 
 from __future__ import annotations
