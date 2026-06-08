@@ -1,0 +1,17 @@
+# Pinned runtime dependencies for the prompt-redact sidecar image (M4-01).
+#
+# Versions pinned from the verified working environment (2026-06-08, Python 3.11).
+# NOTE: torch is intentionally NOT listed here — the Dockerfile installs it from
+# the CPU-only wheel index (download.pytorch.org/whl/cpu) BEFORE these, so the
+# image stays CPU-only and spacy-transformers picks up the pre-installed CPU
+# torch. The spaCy model (en_core_web_trf) is also installed in the Dockerfile,
+# pinned by release-wheel URL.
+#
+# This is version-pinned, not yet hash-pinned. A full `pip-compile
+# --generate-hashes` lockfile that also pins the CPU torch wheel + its hash is
+# the remaining threat-T8 hardening step (tracked in the M4 plan).
+presidio-analyzer==2.2.362
+spacy==3.8.14
+spacy-transformers==1.4.0
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
