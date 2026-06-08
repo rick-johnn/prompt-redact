@@ -128,11 +128,11 @@ We are working in clear stages, each with a finish line we can point to:
 |---|---|---|
 | **M0 — Design ✓ (done)** | Lock the big decisions, write the plans | Decisions signed off, key questions answered |
 | **M1 — The core engine ✓ (done)** | Build the part that finds and hides sensitive text | It hides the test data at our target catch rates |
-| **M2 — The service (now)** | Wrap the engine so other apps can call it | A live service cleans and restores text reliably |
-| **M3 — Speed tuning** | Make it faster *if* testing shows we need to | Measurably faster, same accuracy |
-| **M4 — Packaging** | Bundle it so adopters can install and run it | It starts up cleanly with one command |
+| **M2 — The service ✓ (done)** | Wrap the engine so other apps can call it | A live service cleans and restores text reliably |
+| **M3 — Speed tuning** | Make it faster *if* testing shows we need to | *(conditional — currently low value)* |
+| **M4 — Packaging (now)** | Bundle it so adopters can install and run it | It starts up cleanly with one command |
 
-**M0 (Design) and M1 (the core engine) are complete.** The engine finds and hides sensitive text, and an automated quality check confirms it meets the per-type catch-rate bar (using the heavier AI model described above). We're now in **M2**: wrapping that engine in a live service other apps can call — the request/response API, safety limits, and a multi-turn conversation test are already working.
+**M0 (Design), M1 (the core engine), and M2 (the service) are complete.** The engine finds and hides sensitive text and passes its quality check (using the heavier AI model described above), and it's wrapped in a live service — request/response API, safety limits, and a multi-turn conversation test all working, behind a small fast front-end. We're now in **M4 (packaging)**: bundling it so an adopter can stand the whole thing up with one command. (M3, optional speed tuning, is on hold — the heavier model is accurate but means speed work would have limited payoff.)
 
 > **Explain it simply:** We're building this in steps, like levels in a video game, and each level has a clear way to know you beat it. Right now we're on Level 0: drawing up the blueprints and getting everyone to agree before we start hammering nails. Levels 1 through 4 are: build the marker, turn it into a tool others can use, make it fast, and box it up so customers can install it. We're not allowed to leave Level 0 until a couple of big choices get the green light.
 
