@@ -24,3 +24,14 @@ Record the printed **image size**, **cold-start seconds**, and the **/redact tim
 - **Throwaway**: unpinned deps, single-stage, runs as root. The production sidecar (M4-01) will use the hash-pinned `requirements.txt`, pin the model by digest, and harden the image. This is for **numbers only**.
 - The `SPACY_MODEL` build-arg controls which model is **downloaded** (for an `lg` vs `trf` size comparison). The running app uses its default (`trf`), so **latency here is `trf`**. An `lg` *latency* comparison needs a small runtime model-env knob (a follow-up); we already have indicative sandbox numbers for `lg` (short ~5 ms, 500-tok ~65 ms).
 - `--platform linux/amd64` is set so an Apple-Silicon build matches x86_64 servers — change it if your target differs.
+
+## `Dockerfile.lg` — the true `lg` size (model-split)
+
+`measure/Dockerfile` installs torch for both models, which inflates `lg`. `measure/Dockerfile.lg` is a **model-split** `lg` image (no torch, no `spacy-transformers` — `lg` is a CNN model) for the *real* `lg` size:
+
+```sh
+docker build --platform linux/amd64 -f measure/Dockerfile.lg -t prompt-redact-sidecar:measure-lg-split .
+docker images prompt-redact-sidecar:measure-lg-split   # measured: 2.35 GB (vs 3.91 GB trf)
+```
+
+Size only — the app defaults to `trf`, so this image won't *serve* until a runtime model-env knob lands. The ~1.5 GB saving vs `trf` is real but both are multi-GB; `lg`'s stronger case is latency on bulk inputs.
