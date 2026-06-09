@@ -368,7 +368,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
 </ul>
 
 <h3 id="k8s-isolation">Helm chart &amp; NetworkPolicy isolation (threat T11)</h3>
-<p>The k8s deploy is packaged as a Helm chart, <a href="../deploy/helm/prompt-redact/"><code>deploy/helm/prompt-redact/</code></a> — a <code>redact</code> namespace's worth of resources with knobs in <a href="../deploy/helm/prompt-redact/values.yaml"><code>values.yaml</code></a> (image registry/tag/pullPolicy, replicas, the two body-size caps, resource limits, security contexts, and the NetworkPolicy toggles):</p>
+<p>The k8s deploy is packaged as a Helm chart, <a href="https://github.com/rick-johnn/prompt-redact/tree/main/deploy/helm/prompt-redact"><code>deploy/helm/prompt-redact/</code></a> — a <code>redact</code> namespace's worth of resources with knobs in <a href="https://github.com/rick-johnn/prompt-redact/blob/main/deploy/helm/prompt-redact/values.yaml"><code>values.yaml</code></a> (image registry/tag/pullPolicy, replicas, the two body-size caps, resource limits, security contexts, and the NetworkPolicy toggles):</p>
 <pre>
 helm install redact deploy/helm/prompt-redact -n redact --create-namespace \
   --set image.registry=ghcr.io/yourorg
@@ -380,7 +380,7 @@ helm install redact deploy/helm/prompt-redact -n redact --create-namespace \
   <li><code>allow-client-to-frontend</code> — the front-end accepts ingress only from the configured clients on 8080.</li>
 </ul>
 <p>With <code>networkPolicy.egress.enabled</code> (default on), egress is locked down too: the front-end may reach <em>only</em> the sidecar + DNS, and the sidecar (which serves a baked-in model and never calls out) only DNS — containing a compromised component.</p>
-<p>A <code>NetworkPolicy</code> is only meaningful if the cluster's CNI enforces it (under a non-enforcing CNI it is a silent no-op). <a href="../deploy/helm/netpol-isolation-test.sh"><code>netpol-isolation-test.sh</code></a> proves enforcement is real and non-vacuous by installing the chart with the policy <em>off</em>, then toggling it <em>on</em> and measuring the <em>same</em> path before and after:</p>
+<p>A <code>NetworkPolicy</code> is only meaningful if the cluster's CNI enforces it (under a non-enforcing CNI it is a silent no-op). <a href="https://github.com/rick-johnn/prompt-redact/blob/main/deploy/helm/netpol-isolation-test.sh"><code>netpol-isolation-test.sh</code></a> proves enforcement is real and non-vacuous by installing the chart with the policy <em>off</em>, then toggling it <em>on</em> and measuring the <em>same</em> path before and after:</p>
 <pre>
 Phase 1 (policy off): attacker -> sidecar:8000          REACHABLE   (control)
 Phase 2 (policy on):  sidecar stays Ready under policy   PASS

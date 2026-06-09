@@ -8,7 +8,7 @@
 
 <h1>Caller integration guide</h1>
 
-<p>How an application integrates with prompt-redact. The service redacts text on demand; <strong>your application is the orchestrator</strong> — it decides when to call, what to do with the redacted text, and it owns the token map. See <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> for the deeper design and <a href="../examples/demo_caller.py"><code>examples/demo_caller.py</code></a> for a runnable multi-turn example.</p>
+<p>How an application integrates with prompt-redact. The service redacts text on demand; <strong>your application is the orchestrator</strong> — it decides when to call, what to do with the redacted text, and it owns the token map. See <a href="ARCHITECTURE.html">ARCHITECTURE.html</a> for the deeper design and <a href="https://github.com/rick-johnn/prompt-redact/blob/main/examples/demo_caller.py"><code>examples/demo_caller.py</code></a> for a runnable multi-turn example.</p>
 
 <h2>Run it</h2>
 <pre>
@@ -56,7 +56,7 @@ python examples/demo_caller.py # exercises a multi-turn round-trip
 <h2>Input size</h2>
 <p>prompt-redact targets short, interactive prompts. Large inputs are slower (the NER pass scales with length) and are <strong>bounded, not handled</strong>: a body over the cap (default 1&nbsp;MB, <code>PROMPT_REDACT_MAX_BODY_BYTES</code>) is rejected with <code>413</code> rather than hanging. Keep per-call text to chat-prompt size. Operators: the cap is enforced at both the edge and the sidecar — see <a href="ARCHITECTURE.html#size-caps">request size caps</a>.</p>
 
-<h2>Multi-turn pattern (see <a href="../examples/demo_caller.py">demo_caller.py</a>)</h2>
+<h2>Multi-turn pattern (see <a href="https://github.com/rick-johnn/prompt-redact/blob/main/examples/demo_caller.py">demo_caller.py</a>)</h2>
 <pre>
 map = {}
 # turn 1
