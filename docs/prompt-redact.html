@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>prompt-redact · keep PII out of your AI stack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;450;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --void: #0a0d12;
+    --slate: #12161d;
+    --slate-2: #181d26;
+    --line: #232a35;
+    --line-bright: #2f3845;
+    --ink: #e8ecf1;
+    --ink-dim: #9aa6b4;
+    --ink-faint: #5e6877;
+    --seal: #4ade80;        /* clean / redacted token green */
+    --seal-deep: #16352a;
+    --breach: #ff5a4d;      /* exposed PII red */
+    --breach-deep: #3a1614;
+    --gold: #d8b46a;
+    --maxw: 1180px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--void);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-weight: 400;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  .mono { font-family: 'IBM Plex Mono', monospace; }
+
+  /* ---- layout shell ---- */
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+  section { position: relative; }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--seal);
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 7px; height: 7px;
+    background: var(--seal);
+    box-shadow: 0 0 10px var(--seal);
+    border-radius: 1px;
+  }
+
+  h1, h2, h3 { font-family: 'Space Grotesk', sans-serif; line-height: 1.08; letter-spacing: -0.02em; }
+
+  /* ================= NAV ================= */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(10,13,18,0.82);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner {
+    max-width: var(--maxw); margin: 0 auto; padding: 16px 28px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .brand { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 16px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 9px; }
+  .brand .dot { color: var(--seal); }
+  .nav-links { display: flex; gap: 30px; align-items: center; }
+  .nav-links a { color: var(--ink-dim); text-decoration: none; font-size: 14px; transition: color .2s; }
+  .nav-links a:hover { color: var(--ink); }
+  .nav-cta {
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+    border: 1px solid var(--line-bright); color: var(--ink);
+    padding: 8px 16px; border-radius: 4px; transition: all .2s;
+  }
+  .nav-cta:hover { border-color: var(--seal); color: var(--seal); }
+  @media (max-width: 760px){ .nav-links a:not(.nav-cta){ display:none; } }
+
+  /* ================= HERO ================= */
+  .hero { padding: 88px 0 76px; border-bottom: 1px solid var(--line); overflow: hidden; }
+  .hero::before {
+    content:""; position:absolute; inset:0;
+    background:
+      radial-gradient(700px 420px at 78% 12%, rgba(74,222,128,0.07), transparent 70%),
+      linear-gradient(transparent, transparent 31px, rgba(35,42,53,0.35) 31px, rgba(35,42,53,0.35) 32px);
+    background-size: auto, 100% 32px;
+    pointer-events:none;
+    mask-image: linear-gradient(to bottom, black, transparent 88%);
+  }
+  .hero-grid { display: grid; grid-template-columns: 1.02fr 0.98fr; gap: 56px; align-items: center; position: relative; }
+  @media (max-width: 920px){ .hero-grid { grid-template-columns: 1fr; gap: 44px; } }
+
+  .hero h1 {
+    font-size: clamp(40px, 6vw, 68px);
+    font-weight: 600;
+    margin: 22px 0 0;
+  }
+  .hero h1 .strike {
+    position: relative; color: var(--ink-dim);
+  }
+  .hero h1 .seal-word { color: var(--seal); }
+  .hero-sub { font-size: 19px; color: var(--ink-dim); max-width: 30em; margin-top: 22px; line-height: 1.55; }
+  .hero-sub b { color: var(--ink); font-weight: 500; }
+
+  .hero-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
+  .badge {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 6px 11px; color: var(--ink-dim); background: var(--slate);
+  }
+  .badge b { color: var(--seal); font-weight: 500; }
+
+  .hero-actions { display: flex; gap: 14px; margin-top: 34px; flex-wrap: wrap; }
+  .btn {
+    font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 500;
+    text-decoration: none; padding: 13px 22px; border-radius: 5px;
+    display: inline-flex; align-items: center; gap: 9px; transition: all .2s; cursor: pointer;
+  }
+  .btn-primary { background: var(--seal); color: #06120c; border: 1px solid var(--seal); }
+  .btn-primary:hover { background: #5ee894; box-shadow: 0 0 24px rgba(74,222,128,0.32); }
+  .btn-ghost { border: 1px solid var(--line-bright); color: var(--ink); }
+  .btn-ghost:hover { border-color: var(--ink-dim); background: var(--slate); }
+
+  /* ---- hero transform card (signature) ---- */
+  .transform {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--slate);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+    overflow: hidden;
+  }
+  .transform-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 13px 16px; border-bottom: 1px solid var(--line); background: var(--slate-2);
+  }
+  .tl { width: 11px; height: 11px; border-radius: 50%; }
+  .transform-head .label { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-faint); margin-left: 8px; }
+  .transform-body { padding: 22px 22px 8px; }
+  .tline { font-family: 'IBM Plex Mono', monospace; font-size: 14.5px; line-height: 2.1; }
+  .tlabel { font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 4px; }
+  .pii {
+    background: var(--breach-deep); color: var(--breach);
+    border: 1px solid rgba(255,90,77,0.35); border-radius: 3px;
+    padding: 1px 6px; white-space: nowrap;
+    transition: opacity .35s;
+  }
+  .tok {
+    background: var(--seal-deep); color: var(--seal);
+    border: 1px solid rgba(74,222,128,0.35); border-radius: 3px;
+    padding: 1px 6px; white-space: nowrap; opacity: 0;
+    transition: opacity .35s;
+  }
+  .swap.on .pii { opacity: 0.18; }
+  .swap.on .tok { opacity: 1; }
+  .transform-foot {
+    border-top: 1px solid var(--line); margin-top: 14px;
+    padding: 13px 22px; display: flex; align-items: center; justify-content: space-between;
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-faint);
+  }
+  .transform-foot .keytag { color: var(--gold); }
+  .toggle-note { font-size: 11.5px; color: var(--ink-faint); margin-top: 12px; font-family: 'IBM Plex Mono', monospace; text-align: right; }
+
+  /* ================= SECTION SCAFFOLD ================= */
+  .band { padding: 84px 0; border-bottom: 1px solid var(--line); }
+  .band-head { max-width: 720px; }
+  .band-head h2 { font-size: clamp(28px, 4vw, 42px); font-weight: 600; margin-top: 16px; }
+  .band-head p { color: var(--ink-dim); font-size: 17px; margin-top: 16px; }
+
+  /* ---- problem / flow ---- */
+  .flow {
+    margin-top: 48px;
+    display: grid; grid-template-columns: 1fr auto 1fr; gap: 0; align-items: stretch;
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--slate);
+  }
+  @media (max-width: 820px){ .flow { grid-template-columns: 1fr; } }
+  .flow-col { padding: 28px; }
+  .flow-col.left { background: var(--slate); }
+  .flow-col.right { background: var(--slate-2); }
+  .flow-gate {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 28px 22px; background: var(--void);
+    border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+    min-width: 150px;
+  }
+  @media (max-width: 820px){
+    .flow-gate { border-left: none; border-right: none; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  }
+  .flow-gate .gicon {
+    width: 54px; height: 54px; border-radius: 12px;
+    background: var(--seal-deep); border: 1px solid rgba(74,222,128,0.4);
+    display: grid; place-items: center; color: var(--seal); margin-bottom: 12px;
+  }
+  .flow-gate .gname { font-family:'IBM Plex Mono',monospace; font-size: 13px; font-weight: 600; color: var(--seal); }
+  .flow-gate .gsub { font-family:'IBM Plex Mono',monospace; font-size: 11px; color: var(--ink-faint); margin-top: 4px; text-align:center; }
+  .flow-tag { font-family:'IBM Plex Mono',monospace; font-size: 11px; letter-spacing:.1em; text-transform:uppercase; color: var(--ink-faint); margin-bottom: 16px; }
+  .sink { display:flex; gap: 11px; align-items:flex-start; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+  .sink:last-child { border-bottom: none; }
+  .sink .si { color: var(--ink-faint); margin-top: 3px; flex-shrink:0; }
+  .sink.left .si { color: var(--breach); }
+  .sink.right .si { color: var(--seal); }
+  .sink .st { font-size: 14px; color: var(--ink-dim); }
+  .sink .st b { color: var(--ink); font-weight: 500; }
+
+  /* ---- value grid ---- */
+  .cards { margin-top: 44px; display: grid; grid-template-columns: repeat(3,1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  @media (max-width: 860px){ .cards { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 560px){ .cards { grid-template-columns: 1fr; } }
+  .card { background: var(--slate); padding: 26px; transition: background .2s; }
+  .card:hover { background: var(--slate-2); }
+  .card .cnum { font-family:'IBM Plex Mono',monospace; font-size: 12px; color: var(--seal); }
+  .card h3 { font-size: 18px; font-weight: 600; margin: 12px 0 9px; }
+  .card p { font-size: 14.5px; color: var(--ink-dim); line-height: 1.55; }
+
+  .bottomline {
+    margin-top: 40px; border: 1px solid var(--line-bright); border-radius: 10px;
+    background: linear-gradient(135deg, var(--seal-deep), var(--slate));
+    padding: 28px 32px;
+  }
+  .bottomline .lbl { font-family:'IBM Plex Mono',monospace; font-size: 12px; letter-spacing:.12em; text-transform:uppercase; color: var(--seal); }
+  .bottomline .eq { font-family:'Space Grotesk',sans-serif; font-size: clamp(18px,2.6vw,26px); font-weight: 500; margin-top: 12px; line-height:1.45; }
+  .bottomline .eq .z { color: var(--seal); }
+
+  /* ---- hardening table ---- */
+  .htable { margin-top: 44px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .hrow { display: grid; grid-template-columns: 270px 1fr; border-bottom: 1px solid var(--line); }
+  .hrow:last-child { border-bottom: none; }
+  .hrow:nth-child(odd) .hk { background: var(--slate-2); }
+  .hrow:nth-child(odd) .hv { background: rgba(24,29,38,0.4); }
+  .hk { padding: 18px 22px; font-family:'IBM Plex Mono',monospace; font-size: 14px; font-weight: 500; color: var(--ink); display:flex; gap:11px; align-items:flex-start; }
+  .hk .chk { color: var(--seal); flex-shrink:0; margin-top:1px; }
+  .hv { padding: 18px 22px; font-size: 14.5px; color: var(--ink-dim); line-height: 1.55; }
+  .hv code { font-family:'IBM Plex Mono',monospace; background: var(--void); border:1px solid var(--line); border-radius:3px; padding:1px 5px; font-size:12.5px; color: var(--ink); }
+  @media (max-width: 720px){ .hrow { grid-template-columns: 1fr; } .hv { padding-top: 0; } }
+
+  /* ---- audience ---- */
+  .aud { margin-top: 44px; display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; }
+  @media (max-width: 860px){ .aud { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 540px){ .aud { grid-template-columns: 1fr; } }
+  .aud-card { border: 1px solid var(--line); border-radius: 9px; padding: 22px; background: var(--slate); }
+  .aud-card h3 { font-size: 16px; font-weight: 600; }
+  .aud-card .ids { font-size: 13.5px; color: var(--ink-dim); margin-top: 9px; line-height: 1.5; }
+  .aud-card .regime { margin-top: 14px; display:flex; flex-wrap:wrap; gap: 6px; }
+  .aud-card .regime span { font-family:'IBM Plex Mono',monospace; font-size: 11px; border:1px solid var(--line-bright); border-radius: 3px; padding: 3px 8px; color: var(--gold); }
+
+  /* ---- presidio / fit columns ---- */
+  .twocol { margin-top: 44px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 820px){ .twocol { grid-template-columns: 1fr; } }
+  .panel { border: 1px solid var(--line); border-radius: 10px; padding: 26px; background: var(--slate); }
+  .panel.fit { border-color: rgba(74,222,128,0.3); }
+  .panel.nofit { border-color: var(--line); }
+  .panel h3 { font-size: 18px; font-weight: 600; display:flex; gap:10px; align-items:center; }
+  .panel.fit h3 { color: var(--seal); }
+  .panel.nofit h3 { color: var(--ink-dim); }
+  .panel ul { list-style: none; margin-top: 16px; }
+  .panel li { font-size: 14.5px; color: var(--ink-dim); padding: 9px 0 9px 26px; position: relative; border-bottom: 1px dashed var(--line); line-height:1.5; }
+  .panel li:last-child { border-bottom: none; }
+  .panel li::before { position: absolute; left: 0; top: 9px; font-family:'IBM Plex Mono',monospace; font-size:13px; }
+  .panel.fit li::before { content: "+"; color: var(--seal); }
+  .panel.nofit li::before { content: "–"; color: var(--ink-faint); }
+  .panel li b { color: var(--ink); font-weight: 500; }
+
+  .presidio-note { margin-top: 28px; padding: 22px 26px; border:1px solid var(--line); border-left: 3px solid var(--gold); border-radius: 0 8px 8px 0; background: var(--slate); }
+  .presidio-note .t { font-family:'IBM Plex Mono',monospace; font-size: 12px; letter-spacing:.1em; text-transform:uppercase; color: var(--gold); }
+  .presidio-note p { color: var(--ink-dim); font-size: 14.5px; margin-top: 10px; line-height:1.6; }
+  .presidio-note p b { color: var(--ink); font-weight:500; }
+
+  /* ---- get started ---- */
+  .start { margin-top: 40px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px){ .start { grid-template-columns: 1fr; } }
+  .term { border: 1px solid var(--line); border-radius: 10px; overflow:hidden; background: var(--void); }
+  .term-head { padding: 12px 16px; border-bottom:1px solid var(--line); background: var(--slate-2); font-family:'IBM Plex Mono',monospace; font-size: 12px; color: var(--ink-faint); display:flex; align-items:center; gap:8px; }
+  .term-body { padding: 22px; font-family:'IBM Plex Mono',monospace; font-size: 13.5px; line-height: 1.8; }
+  .term-body .c { color: var(--ink-faint); }
+  .term-body .p { color: var(--seal); }
+  .term-body .cmd { color: var(--ink); }
+
+  /* ================= CTA / FOOTER ================= */
+  .finale { padding: 96px 0; text-align: center; }
+  .finale h2 { font-size: clamp(30px, 5vw, 52px); font-weight: 600; max-width: 16em; margin: 0 auto; }
+  .finale p { color: var(--ink-dim); font-size: 18px; max-width: 34em; margin: 22px auto 0; }
+  .finale .hero-actions { justify-content: center; }
+
+  footer { border-top: 1px solid var(--line); padding: 36px 0; }
+  .foot-inner { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; display:flex; justify-content:space-between; flex-wrap:wrap; gap: 18px; align-items:center; }
+  .foot-links { display:flex; gap: 24px; flex-wrap:wrap; }
+  .foot-links a { color: var(--ink-dim); text-decoration:none; font-size: 13px; font-family:'IBM Plex Mono',monospace; transition: color .2s; }
+  .foot-links a:hover { color: var(--seal); }
+  .foot-meta { font-family:'IBM Plex Mono',monospace; font-size: 12px; color: var(--ink-faint); }
+
+  :focus-visible { outline: 2px solid var(--seal); outline-offset: 3px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; scroll-behavior: auto; }
+  }
+
+  .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <div class="brand">prompt<span class="dot">-</span>redact</div>
+    <div class="nav-links">
+      <a href="#problem">The problem</a>
+      <a href="#value">Value</a>
+      <a href="#trust">Why trust it</a>
+      <a href="#start">Get started</a>
+      <a href="#start" class="nav-cta">docker compose up</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ===================== HERO ===================== -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="eyebrow">Free · MIT-licensed · Self-hosted</span>
+      <h1>Keep PII out of your AI stack, and <span class="seal-word">everything downstream.</span></h1>
+      <p class="hero-sub">
+        A small, drop-in service that finds and hides personal information in text <b>before</b> it reaches a large language model, your logs, your analytics warehouse, or any other system not cleared to hold it. Clean the text once. Use it safely everywhere.
+      </p>
+      <div class="hero-badges">
+        <span class="badge">Never calls an LLM</span>
+        <span class="badge">Never phones home</span>
+        <span class="badge"><b>~20 ms</b> p95</span>
+        <span class="badge"><b>14 MB</b> edge image</span>
+      </div>
+      <div class="hero-actions">
+        <a href="#start" class="btn btn-primary">Get started in minutes →</a>
+        <a href="#trust" class="btn btn-ghost">Read the threat model</a>
+      </div>
+    </div>
+
+    <!-- SIGNATURE: live redaction transform -->
+    <div>
+      <div class="transform">
+        <div class="transform-head">
+          <span class="tl" style="background:#ff5f56"></span>
+          <span class="tl" style="background:#ffbd2e"></span>
+          <span class="tl" style="background:#27c93f"></span>
+          <span class="label">POST /redact</span>
+        </div>
+        <div class="transform-body">
+          <div class="tlabel">input</div>
+          <div class="tline" id="swap1">
+            Email <span class="pii">John Smith</span> at <span class="pii">john@example.com</span>.
+          </div>
+          <div class="tlabel" style="margin-top:18px;">output (safe to send anywhere)</div>
+          <div class="tline swap" id="swap2">
+            Email <span class="pii" style="position:absolute;visibility:hidden;">x</span><span class="tok">[PERSON_1]</span> at <span class="tok">[EMAIL_ADDRESS_1]</span>.
+          </div>
+        </div>
+        <div class="transform-foot">
+          <span>+ private restore key <span class="keytag">stays inside your walls</span></span>
+          <span class="mono" style="color:var(--seal);">✓ clean</span>
+        </div>
+      </div>
+      <div class="toggle-note">redact ⇄ unredact · the secret never enters the text</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== THE PROBLEM ===================== -->
+<section class="band" id="problem">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <span class="eyebrow">The 30-second version</span>
+      <h2>The risk isn't only the model. It's everywhere the text lands after.</h2>
+      <p>
+        Regulated teams want the productivity of AI assistants, but their prompts are full of patient names, account numbers, SSNs, and case files. Many organizations just ban the tools and eat the loss. Even with a Business Associate Agreement covering one approved LLM, the same text quietly flows into systems that aren't covered.
+      </p>
+    </div>
+
+    <div class="flow reveal">
+      <div class="flow-col left">
+        <div class="flow-tag">raw prompt, unprotected</div>
+        <div class="sink left"><span class="si mono">●</span><span class="st"><b>Prompt-logging & observability</b> tools, often run by outside vendors</span></div>
+        <div class="sink left"><span class="si mono">●</span><span class="st"><b>Analytics pipelines</b> and data warehouses</span></div>
+        <div class="sink left"><span class="si mono">●</span><span class="st"><b>Eval & QA systems</b> where engineers inspect real traffic</span></div>
+        <div class="sink left"><span class="si mono">●</span><span class="st"><b>Cheaper or specialized models</b> not on the approved list</span></div>
+      </div>
+
+      <div class="flow-gate">
+        <div class="gicon">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>
+        </div>
+        <div class="gname">/redact</div>
+        <div class="gsub">trust<br>boundary</div>
+      </div>
+
+      <div class="flow-col right">
+        <div class="flow-tag">redacted once, reused safely</div>
+        <div class="sink right"><span class="si mono">✓</span><span class="st"><b>The LLM</b> sees only stable, reversible tokens</span></div>
+        <div class="sink right"><span class="si mono">✓</span><span class="st"><b>Logs & indexes</b> hold nothing protected</span></div>
+        <div class="sink right"><span class="si mono">✓</span><span class="st"><b>Eval sets & archives</b> stay clean by default</span></div>
+        <div class="sink right"><span class="si mono">✓</span><span class="st"><b>Rehydrate with /unredact</b> only where it's appropriate</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== VALUE ===================== -->
+<section class="band" id="value">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <span class="eyebrow">It's free, so where's the value?</span>
+      <h2>Free to license is not the same as low value.</h2>
+      <p>The value shows up on the risk and cost lines that aren't a software invoice.</p>
+    </div>
+
+    <div class="cards reveal">
+      <div class="card">
+        <div class="cnum mono">01</div>
+        <h3>Risk reduction</h3>
+        <p>A single HIPAA, PCI, or GDPR finding dwarfs the cost of any redaction tool. This is insurance you run yourself.</p>
+      </div>
+      <div class="card">
+        <div class="cnum mono">02</div>
+        <h3>No per-call, no per-seat fees</h3>
+        <p>Cloud DLP services bill per request and send your data out to score it. This does neither: unlimited volume, zero data egress.</p>
+      </div>
+      <div class="card">
+        <div class="cnum mono">03</div>
+        <h3>No vendor lock-in</h3>
+        <p>Open source, standard HTTP, runs on your cluster. Nothing to migrate off later.</p>
+      </div>
+      <div class="card">
+        <div class="cnum mono">04</div>
+        <h3>Auditability = trust</h3>
+        <p>You can read every line that touches your data. With an open-source control, you are the compliance team, not a vendor you take on faith.</p>
+      </div>
+      <div class="card">
+        <div class="cnum mono">05</div>
+        <h3>Productivity unlocked</h3>
+        <p>The teams that had to ban AI tools can turn them back on, safely.</p>
+      </div>
+      <div class="card">
+        <div class="cnum mono">06</div>
+        <h3>Yours to control</h3>
+        <p>You stay in full control of the data, the restore key, and the deployment. End to end.</p>
+      </div>
+    </div>
+
+    <div class="bottomline reveal">
+      <div class="lbl">The bottom-line framing</div>
+      <div class="eq">
+        Avoided breach exposure + avoided DLP fees + unlocked AI productivity, at <span class="z">$0</span> license cost and <span class="z">$0</span> data egress.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== WHY TRUST IT ===================== -->
+<section class="band" id="trust">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <span class="eyebrow">Hardened, not a weekend project</span>
+      <h2>Built and verified like infrastructure that handles regulated data.</h2>
+    </div>
+
+    <div class="htable reveal">
+      <div class="hrow">
+        <div class="hk"><span class="chk mono">✓</span>Documented threat model</div>
+        <div class="hv">A written threat model with 10+ threats, each marked <em>enforced</em>, <em>mitigated</em>, or <em>documented</em>, honestly, including the ones the caller must own.</div>
+      </div>
+      <div class="hrow">
+        <div class="hk"><span class="chk mono">✓</span>Supply-chain integrity</div>
+        <div class="hv">Every dependency and the NER model wheel are SHA256 hash-pinned and installed <code>--require-hashes</code>. Air-gap friendly.</div>
+      </div>
+      <div class="hrow">
+        <div class="hk"><span class="chk mono">✓</span>CI that can't lie</div>
+        <div class="hv">The build runs the real detection path against the real model and fails loudly if those tests are skipped. A green check means it genuinely ran.</div>
+      </div>
+      <div class="hrow">
+        <div class="hk"><span class="chk mono">✓</span>Proven network isolation</div>
+        <div class="hv">The model sidecar is internal-only, enforced by a default-deny Kubernetes <code>NetworkPolicy</code> on ingress and egress, with a test that proves enforcement is real: reachable before the policy, blocked after.</div>
+      </div>
+      <div class="hrow">
+        <div class="hk"><span class="chk mono">✓</span>Hardened containers</div>
+        <div class="hv">Non-root, dropped capabilities, seccomp, read-only root filesystem on the edge, distroless front-end.</div>
+      </div>
+      <div class="hrow">
+        <div class="hk"><span class="chk mono">✓</span>Packaged to deploy</div>
+        <div class="hv">One-command <code>docker compose up</code> for local, a parameterized Helm chart for Kubernetes.</div>
+      </div>
+      <div class="hrow">
+        <div class="hk"><span class="chk mono">✓</span>Measured quality</div>
+        <div class="hv">An eval harness with per-entity recall targets, and candor about real-world gaps, not vanity metrics.</div>
+      </div>
+      <div class="hrow">
+        <div class="hk"><span class="chk mono">✓</span>No PII in logs</div>
+        <div class="hv">Errors are generic by design, no input echoed, with a correlation ID so failures are still debuggable without leaking content.</div>
+      </div>
+      <div class="hrow">
+        <div class="hk"><span class="chk mono">✓</span>Small & fast</div>
+        <div class="hv">~20 ms p95 for a chat-turn prompt on CPU, a 14 MB edge image, stateless so it scales horizontally.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== PRESIDIO ===================== -->
+<section class="band">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <span class="eyebrow">Built on Microsoft Presidio</span>
+      <h2>We don't reinvent detection. We add the layer teams shouldn't have to assemble.</h2>
+    </div>
+    <div class="presidio-note reveal">
+      <div class="t">The division of labor</div>
+      <p>
+        <b>Presidio does the hard part:</b> the NER, recognizers, and regex that decide "John Smith is a PERSON." We lock it in as the engine and add cross-turn token stability, LLM-friendly reversible tokens (the secret stays out of the text), a clean language-agnostic <code style="font-family:'IBM Plex Mono',monospace;background:var(--void);border:1px solid var(--line);border-radius:3px;padding:1px 5px;font-size:12.5px;color:var(--ink)">/redact</code> + <code style="font-family:'IBM Plex Mono',monospace;background:var(--void);border:1px solid var(--line);border-radius:3px;padding:1px 5px;font-size:12.5px;color:var(--ink)">/unredact</code> contract any stack can call, a tuned compliance-defensible default, and operational hardening.
+      </p>
+    </div>
+
+    <div class="twocol reveal">
+      <div class="panel fit">
+        <h3><span class="mono">→</span> When it earns its keep</h3>
+        <ul>
+          <li>You call from a <b>non-Python stack</b> and want a clean HTTP contract</li>
+          <li>You want <b>stable reversible tokens across a conversation</b> without building that yourself</li>
+          <li>You want a redaction tier with a <b>defensible, measured quality bar</b></li>
+          <li>You want <b>deployment hardening</b> out of the box</li>
+        </ul>
+      </div>
+      <div class="panel nofit">
+        <h3><span class="mono">→</span> When you don't need it</h3>
+        <ul>
+          <li>Your app is <b>already Python</b></li>
+          <li>You're comfortable wiring <b>Presidio's anonymizer and a counter</b> yourself</li>
+          <li>You don't need the <b>measured compliance default</b></li>
+          <li>Calling Presidio directly is then a legitimate choice, and we'll say so</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== WHO IT'S FOR ===================== -->
+<section class="band">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <span class="eyebrow">Who it's for</span>
+      <h2>Wherever sensitive text meets AI.</h2>
+    </div>
+    <div class="aud reveal">
+      <div class="aud-card">
+        <h3>Healthcare</h3>
+        <div class="ids">Patient names, DOBs, MRNs, clinical narratives</div>
+        <div class="regime"><span>HIPAA</span></div>
+      </div>
+      <div class="aud-card">
+        <h3>Finance & insurance</h3>
+        <div class="ids">Account numbers, card PANs, SSNs, balances</div>
+        <div class="regime"><span>PCI-DSS</span><span>GLBA</span></div>
+      </div>
+      <div class="aud-card">
+        <h3>Pharma & clinical research</h3>
+        <div class="ids">Subject IDs, site codes, adverse-event narratives</div>
+        <div class="regime"><span>HIPAA</span><span>GxP</span></div>
+      </div>
+      <div class="aud-card">
+        <h3>Legal & professional services</h3>
+        <div class="ids">Client names, matter numbers, privileged content</div>
+        <div class="regime"><span>Privilege</span><span>Bar rules</span></div>
+      </div>
+      <div class="aud-card">
+        <h3>Public sector & education</h3>
+        <div class="ids">Citizen records, case files, student records</div>
+        <div class="regime"><span>Privacy Act</span><span>FERPA</span></div>
+      </div>
+      <div class="aud-card">
+        <h3>Cross-border / EU</h3>
+        <div class="ids">Anything that qualifies as personal data</div>
+        <div class="regime"><span>GDPR</span><span>UK GDPR</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== GET STARTED ===================== -->
+<section class="band" id="start">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <span class="eyebrow">Get started in minutes</span>
+      <h2>Point your app at /redact and /unredact. The caller orchestrates.</h2>
+    </div>
+    <div class="start reveal">
+      <div class="term">
+        <div class="term-head"><span class="tl" style="background:#ff5f56;width:9px;height:9px"></span><span class="tl" style="background:#ffbd2e;width:9px;height:9px"></span><span class="tl" style="background:#27c93f;width:9px;height:9px"></span><span style="margin-left:6px">local · your laptop</span></div>
+        <div class="term-body">
+          <div class="c"># The whole stack, locally</div>
+          <div><span class="p">$</span> <span class="cmd">docker compose up</span></div>
+        </div>
+      </div>
+      <div class="term">
+        <div class="term-head"><span class="tl" style="background:#ff5f56;width:9px;height:9px"></span><span class="tl" style="background:#ffbd2e;width:9px;height:9px"></span><span class="tl" style="background:#27c93f;width:9px;height:9px"></span><span style="margin-left:6px">kubernetes · hardened &amp; isolated</span></div>
+        <div class="term-body">
+          <div class="c"># The default-deny, network-isolated deploy</div>
+          <div><span class="p">$</span> <span class="cmd">helm install redact \</span></div>
+          <div style="padding-left:18px"><span class="cmd">deploy/helm/prompt-redact \</span></div>
+          <div style="padding-left:18px"><span class="cmd">-n redact --create-namespace</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FINALE ===================== -->
+<section class="finale">
+  <div class="wrap">
+    <span class="eyebrow" style="justify-content:center; display:flex;">The bottom line</span>
+    <h2 class="reveal" style="margin-top:18px">Stop choosing between using AI and protecting your data.</h2>
+    <p class="reveal">
+      Redact the sensitive parts once, keep them inside your trust boundary, and let your whole stack run on text that's safe to handle. Free to run, open to inspect, yours to control.
+    </p>
+    <div class="hero-actions reveal">
+      <a href="#start" class="btn btn-primary">docker compose up →</a>
+      <a href="#trust" class="btn btn-ghost">Read the architecture</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="foot-inner">
+    <div class="brand">prompt<span class="dot">-</span>redact</div>
+    <div class="foot-links">
+      <a href="../README.md">How it works</a>
+      <a href="../BUSINESS_OVERVIEW.md">Business case</a>
+      <a href="CALLER_GUIDE.html">Caller guide</a>
+      <a href="ARCHITECTURE.html">Architecture & threat model</a>
+    </div>
+    <div class="foot-meta">MIT-licensed · self-hosted · v0</div>
+  </div>
+</footer>
+
+<script>
+  // Signature: cycle the redaction transform
+  const swap = document.getElementById('swap2');
+  let on = false;
+  function cycle(){
+    on = !on;
+    swap.classList.toggle('on', on);
+  }
+  setTimeout(()=>{ swap.classList.add('on'); on = true; setInterval(cycle, 2600); }, 700);
+
+  // Scroll reveal
+  const io = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target);} });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+
+</body>
+</html>
