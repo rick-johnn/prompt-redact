@@ -7,7 +7,6 @@
 # trf-only (the recall bar). lg is a documented --build-arg escape hatch, not a
 # shipped variant.
 ARG PYTHON_VERSION=3.11
-ARG TRF_MODEL_WHEEL=https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl
 
 # --- builder: deps + model into a venv ---
 FROM python:${PYTHON_VERSION}-slim AS builder
@@ -21,10 +20,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.txt .
 RUN pip install --require-hashes -r requirements.txt
 
-# The spaCy transformer model, pinned by release-wheel URL. Retry — the large
-# wheel occasionally 504s from GitHub's release CDN; verify the import after.
-ARG TRF_MODEL_WHEEL
-RUN for i in 1 2 3 4 5; do pip install "${TRF_MODEL_WHEEL}" && break; echo "model download retry $i"; sleep 10; done \
+# The spaCy transformer model, HASH-PINNED (threat T8). --require-hashes
+# verifies the wheel's integrity; --no-deps because its dependencies came from
+# requirements.txt above. Retry — the large wheel occasionally 504s from
+# GitHub's release CDN (the hash still guarantees integrity). Verify the import.
+COPY requirements-model.txt .
+RUN for i in 1 2 3 4 5; do pip install --require-hashes --no-deps -r requirements-model.txt && break; echo "model download retry $i"; sleep 10; done \
  && python -c "import en_core_web_trf"
 
 # --- runtime: copy the venv + app, run as non-root ---

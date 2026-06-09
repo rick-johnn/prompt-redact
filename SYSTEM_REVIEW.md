@@ -75,7 +75,7 @@ Importing the package needs no ML stack; Presidio/torch load lazily only when an
 
 ### 3.5 `deploy/` + `docker-compose.yml` + `examples/`
 
-- **`deploy/sidecar.Dockerfile`** — multi-stage `python:3.11-slim`; deps via `--require-hashes -r requirements.txt` (incl. `torch==2.12.0+cpu`); `trf` model pinned by release-wheel URL (with retry); runs **non-root** (uid 10001); `HEALTHCHECK` on `/healthz`. **3.01 GB.**
+- **`deploy/sidecar.Dockerfile`** — multi-stage `python:3.11-slim`; deps via `--require-hashes -r requirements.txt` (incl. `torch==2.12.0+cpu`); the `trf` model wheel is **hash-pinned** (`requirements-model.txt`, installed `--require-hashes --no-deps` — its dep `spacy-curated-transformers` is in the lockfile, with retry); runs **non-root** (uid 10001); `HEALTHCHECK` on `/healthz`. **2.82 GB.**
 - **`frontend/Dockerfile`** — multi-stage Go → **distroless static nonroot**. **14.1 MB.**
 - **`docker-compose.yml`** — front-end published on `:8080`; **sidecar internal-only** (`expose`, no host port); front-end gated on `depends_on: condition: service_healthy`.
 - **`deploy/compose-smoke.sh`** — brings the stack up, runs the demo caller, and **tests the isolation boundary** (asserts the sidecar is unreachable from the host).
@@ -137,7 +137,7 @@ Plus: containers run **non-root**; the sidecar makes **no network calls** while 
 ## 7. Deployment & operations
 
 - **`docker compose up`** brings up front-end (`:8080`) + sidecar (internal). Verified end-to-end on Docker.
-- **Images:** sidecar 3.01 GB (CPU-only, hash-pinned, non-root); front-end 14.1 MB (distroless).
+- **Images:** sidecar 2.82 GB (CPU-only, fully hash-pinned incl. the model wheel, non-root); front-end 14.1 MB (distroless).
 - **Cold start:** ~4–6 s (model load); `/healthz` gates readiness; compose uses `service_healthy`.
 - **Latency (measured, CPU):** short message ~20 ms p95; ~500-token ~470 ms. (Latency target is **size-aware**: ≤ 50 ms for short chat-turn messages; large inputs are slower and bounded by the size cap, not handled.)
 - **Config (env):** front-end `PROMPT_REDACT_LISTEN` / `_UPSTREAM` / `_MAX_BODY_BYTES`; sidecar `PROMPT_REDACT_MAX_BODY_BYTES`; model via `AnalyzerConfig.spacy_model`.
@@ -161,7 +161,7 @@ Plus: containers run **non-root**; the sidecar makes **no network calls** while 
 - **Bulk / large documents are not a target** — bounded by the size cap (413), not handled; ~500-token latency is ~470 ms on CPU.
 - **Single language (en)** — per-call `language` is validated, not multi-model.
 - **No auth / rate limiting / multi-tenant** — by design, handled by surrounding infra (ADR 0002 non-goals).
-- **Model wheel not yet hash-pinned/mirrored** — deps are; the `trf` model is pinned by version URL (remaining T8 nicety).
+- **Model wheel hash-pinned; mirroring is a deployment step** — the `trf` model wheel is now SHA256-pinned (`requirements-model.txt`, `--require-hashes`) and its dep `spacy-curated-transformers` is in the lockfile, so the whole image is hash-verified. For a *fully air-gapped* build, mirror the wheel inside your trust boundary and swap the URL (the hash still verifies) — that mirroring step is deployment-specific, not shipped.
 - **No k8s manifests** (compose is the shipped artifact); **no CI pipeline** yet.
 - **M3 (hybrid regex+NER) parked** — low value with `trf` (PERSON still needs the full NER pass).
 - **`lg` is a build-arg escape hatch only** — not a shipped/tested variant; it fails the recall gate.

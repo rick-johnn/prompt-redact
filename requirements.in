@@ -11,7 +11,7 @@
 
 presidio-analyzer==2.2.362
 spacy==3.8.14
-spacy-transformers==1.4.0
+spacy-curated-transformers==0.3.1   # en_core_web_trf 3.8 uses the curated_transformer factory
 fastapi==0.128.0
 uvicorn[standard]==0.40.0
 torch==2.12.0+cpu
