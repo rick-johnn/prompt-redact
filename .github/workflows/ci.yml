@@ -1,0 +1,81 @@
+name: CI
+
+# Three jobs:
+#   unit        - fast, pure-logic Python tests (no ML stack)
+#   integration - installs the hash-pinned runtime + the trf model and runs the
+#                 integration tests in STRICT mode (PROMPT_REDACT_REQUIRE_MODEL=1)
+#                 so a missing/skipped model FAILS the build instead of passing
+#                 green. This is the "fail-loud" guard.
+#   go          - Go front-end tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    name: Python unit (no model)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      # FastAPI (for the TestClient-based service tests, which use fake
+      # analyzers) + pytest/httpx. Deliberately NOT torch/presidio/the model —
+      # this job proves the pure-logic path runs without the ML stack.
+      - run: pip install "fastapi==0.128.0" -r requirements-dev.in
+      # `python -m pytest` (not bare `pytest`) so the repo root is on sys.path
+      # and prompt_redact_core / evals import without an editable install.
+      - run: python -m pytest -m "not integration"
+
+  integration:
+    name: Python integration (real trf, fail-loud)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      # Same install path as the sidecar image: hash-pinned runtime deps, then
+      # the hash-pinned model wheel (--no-deps; its dep spacy-curated-transformers
+      # is already in requirements.txt). Then the test-only deps.
+      - run: pip install --require-hashes -r requirements.txt
+      - run: pip install --require-hashes --no-deps -r requirements-model.txt
+      - run: pip install -r requirements-dev.in
+      - run: python -c "import en_core_web_trf"  # fail early if the model is broken
+      # STRICT: a skipped integration test is a failure here. Run per-file so
+      # each file's session-scoped analyzer fixture (and its trf model) is freed
+      # between processes — bounds peak memory to one model at a time.
+      - name: Integration tests (strict)
+        env:
+          PROMPT_REDACT_REQUIRE_MODEL: "1"
+        run: |
+          set -u
+          fail=0
+          for f in \
+            tests/test_analyzer.py \
+            tests/test_recognizers.py \
+            tests/test_redactor.py \
+            tests/test_realworld.py \
+            tests/test_eval_harness.py \
+            tests/test_service_conversation.py; do
+            echo "::group::$f"
+            python -m pytest "$f" -m integration -v || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+
+  go:
+    name: Go front-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false  # stdlib-only module, no go.sum to key a cache on
+      - working-directory: frontend
+        run: go test ./...

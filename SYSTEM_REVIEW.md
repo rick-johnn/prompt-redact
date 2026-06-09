@@ -147,11 +147,11 @@ Plus: containers run **non-root**; the sidecar makes **no network calls** while 
 
 ## 8. Testing
 
-- **Python:** 13 test files, ~217 tests. Pure-logic tests (token engine, map-merge, guards, unredactor, recognizer checksums, eval corpus/metrics, service behavior via fake analyzers) run with no ML stack; **integration tests** exercise real Presidio/`trf` and the FastAPI app (auto-skip if the model is absent — but **run** in a Docker/CI env with it).
+- **Python:** 13 test files, ~217 tests. Pure-logic tests (token engine, map-merge, guards, unredactor, recognizer checksums, eval corpus/metrics, service behavior via fake analyzers) run with no ML stack; **integration tests** exercise real Presidio/`trf` and the FastAPI app. They **auto-skip** if the model is absent (so a contributor without the ML stack still gets the pure tests) — but in **CI they fail loud**: the integration job sets `PROMPT_REDACT_REQUIRE_MODEL=1`, and `tests/conftest.py` converts any integration *skip* into a *failure* (and fails if integration tests were selected but none ran). A green build can no longer mean "silently skipped the hardest tests."
 - **Go:** `frontend/proxy_test.go` (proxy forwarding, 413 cap, healthz, bad-upstream).
 - **Stack:** `deploy/compose-smoke.sh` (compose up → demo caller round-trip → sidecar-isolation negative test).
 - **Quality gate:** `python -m evals.run_eval` (non-zero exit on miss).
-- **Known CI consideration:** running the full Python suite loads `trf`/torch across several fixtures and can OOM a small runner — shard or provision RAM.
+- **CI:** `.github/workflows/ci.yml` — three jobs: **unit** (pure-logic, no ML stack), **integration** (installs the hash-pinned runtime + model and runs the real path in fail-loud strict mode), and **go** (front-end). The OOM risk (loading `trf`/torch across several session fixtures) is handled by running the integration files **one per process**, so peak memory is bounded to one model at a time.
 
 ---
 
@@ -162,7 +162,7 @@ Plus: containers run **non-root**; the sidecar makes **no network calls** while 
 - **Single language (en)** — per-call `language` is validated, not multi-model.
 - **No auth / rate limiting / multi-tenant** — by design, handled by surrounding infra (ADR 0002 non-goals).
 - **Model wheel hash-pinned; mirroring is a deployment step** — the `trf` model wheel is now SHA256-pinned (`requirements-model.txt`, `--require-hashes`) and its dep `spacy-curated-transformers` is in the lockfile, so the whole image is hash-verified. For a *fully air-gapped* build, mirror the wheel inside your trust boundary and swap the URL (the hash still verifies) — that mirroring step is deployment-specific, not shipped.
-- **No k8s manifests** (compose is the shipped artifact); **no CI pipeline** yet.
+- **No k8s manifests** (compose is the shipped artifact). CI exists (`.github/workflows/ci.yml`, fail-loud integration job); a k8s deploy pipeline is still future work.
 - **M3 (hybrid regex+NER) parked** — low value with `trf` (PERSON still needs the full NER pass).
 - **`lg` is a build-arg escape hatch only** — not a shipped/tested variant; it fails the recall gate.
 

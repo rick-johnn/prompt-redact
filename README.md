@@ -107,6 +107,8 @@ Run the tests — integration tests that need Presidio/the model **auto-skip** i
 pytest
 ```
 
+In CI those skips are not silent: the integration job sets `PROMPT_REDACT_REQUIRE_MODEL=1`, which turns any skipped integration test into a **failure** (see [`tests/conftest.py`](tests/conftest.py) and [`.github/workflows/ci.yml`](.github/workflows/ci.yml)) — so a green build always means the real redaction path actually ran.
+
 Run the redaction-quality gate (the M1 exit gate — per-entity recall ≥ 0.99 on the gated entity types):
 
 ```sh
