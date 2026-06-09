@@ -17,7 +17,7 @@ The project is in **design and planning phase** — there is no source code yet.
 ## Documentation format
 
 - **`docs/` is HTML.** Architecture, plans, decisions, runbooks, and any other project documentation under `docs/` is authored as `.html` (minimal structure — `<!doctype html>`, `<html>`, `<head><title>…</title></head>`, `<body>`; no CSS/JS unless asked).
-- **Markdown is reserved for:** `README.md` (GitHub renders it), `CLAUDE.md` (this file), and `skills/*/SKILL.md` (the skills framework expects markdown with frontmatter).
+- **Markdown is reserved for:** top-level GitHub-rendered docs (`README.md`, `PITCH.md`, `BUSINESS_OVERVIEW.md`, and review notes such as `SYSTEM_REVIEW*.md`), `CLAUDE.md` (this file), and `skills/*/SKILL.md` (the skills framework expects markdown with frontmatter). Note: `docs/index.html` is the published GitHub Pages landing page (the styled web version of `PITCH.md`) and intentionally carries CSS/JS — the "no CSS/JS" rule above applies to the other `docs/` pages.
 - Inter-doc links inside `docs/` should use `.html` suffixes.
 - When editing a doc under `docs/` that is still in markdown, propose converting it as part of the change rather than perpetuating the format.
 
