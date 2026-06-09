@@ -54,7 +54,7 @@ python examples/demo_caller.py # exercises a multi-turn round-trip
 <p>The service only acts when called. <strong>It cannot enforce its own use</strong> — if your app sends raw text to an LLM without calling <code>/redact</code> first, identifiers leak and the service can't prevent it. This is the caller's contract to honor: code-review every path from user input to a downstream sink, and consider a separate egress control as defense-in-depth.</p>
 
 <h2>Input size</h2>
-<p>prompt-redact targets short, interactive prompts. Large inputs are slower (the NER pass scales with length) and are <strong>bounded, not handled</strong>: a body over the cap is rejected with <code>413</code> rather than hanging. Keep per-call text to chat-prompt size.</p>
+<p>prompt-redact targets short, interactive prompts. Large inputs are slower (the NER pass scales with length) and are <strong>bounded, not handled</strong>: a body over the cap (default 1&nbsp;MB, <code>PROMPT_REDACT_MAX_BODY_BYTES</code>) is rejected with <code>413</code> rather than hanging. Keep per-call text to chat-prompt size. Operators: the cap is enforced at both the edge and the sidecar — see <a href="ARCHITECTURE.html#size-caps">request size caps</a>.</p>
 
 <h2>Multi-turn pattern (see <a href="../examples/demo_caller.py">demo_caller.py</a>)</h2>
 <pre>

@@ -350,6 +350,23 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
   <li>Container image size is dominated by the model. With the default transformer (<code>en_core_web_trf</code> + torch) expect multiple GB; <code>en_core_web_lg</code> is hundreds of MB. Worth a registry mirror inside the trust boundary (threat T8).</li>
 </ul>
 
+<h3 id="size-caps">Request size caps — the two layers (threat T9)</h3>
+<p>The body-size limit (the <code>413 request body too large</code> guard) is enforced at <strong>both</strong> layers, each reading the same env var <code>PROMPT_REDACT_MAX_BODY_BYTES</code> (default <strong>1&nbsp;MB</strong> each). The cap is what keeps this an <em>interactive-prompt</em> service rather than a document processor: it bounds each request to roughly chat-turn size and rejects an oversized paste before it reaches the NER pass. It is a DoS/abuse guardrail, not a document-handling feature.</p>
+<table>
+  <thead><tr><th>Layer</th><th>What it checks</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td>Go front-end (public edge)</td><td>The <em>declared</em> <code>Content-Length</code> header only</td><td><strong>Cheap fast-reject.</strong> Keeps an obviously-oversized request off the network and off the sidecar. Does nothing for chunked / missing / lying <code>Content-Length</code> (forwards those).</td></tr>
+    <tr><td>Python sidecar (internal)</td><td>The declared <code>Content-Length</code> <em>and</em> the <strong>actual buffered byte count</strong></td><td><strong>Authoritative.</strong> Catches what the edge waves through (chunked / no <code>Content-Length</code> / a lying header), and enforces the cap even on a request that reaches it directly over loopback (defense-in-depth, threat T11).</td></tr>
+  </tbody>
+</table>
+<p><strong>The sidecar cap is the real ceiling; the front-end cap is an optimization.</strong> So:</p>
+<ul>
+  <li><strong>Default: set both to the same value.</strong> The committed <code>docker-compose.yml</code> sets <code>PROMPT_REDACT_MAX_BODY_BYTES</code> explicitly on both services so the two are visibly in sync.</li>
+  <li>They are <strong>separate processes / containers</strong> — there is no single shared knob. Setting it on the front-end alone leaves the sidecar at its 1&nbsp;MB default.</li>
+  <li>If they differ, the effective limit is the <strong>smaller</strong>, and a rejection can come from <em>either</em> layer. Prefer <code>front-end&nbsp;&le;&nbsp;sidecar</code> so the edge never forwards a request the sidecar will only reject anyway.</li>
+  <li>One cosmetic difference in the reject: the sidecar's 413 body includes a <code>correlation_id</code> (it runs the correlation middleware); the front-end's edge 413 does not. Both use the same <code>{"detail":"request body too large"}</code> shape.</li>
+</ul>
+
 <h3>Resolved</h3>
 <p>Primary v1 target: <strong>standalone k8s service</strong> (multiple callers share one deployment) + docker-compose for local dev. This drives the M4 deliverables and the supply-chain row (T8) in the threat model. Sidecar / VM / edge remain documented alternatives an adopter may choose.</p>
 
