@@ -1,6 +1,6 @@
 # prompt-redact — keep PII out of your AI stack, and everything downstream
 
-**Free. Open source. Self-hosted. Your sensitive text never leaves your walls.**
+**Free. [MIT-licensed](LICENSE). Self-hosted. Your sensitive text never leaves your walls.**
 
 `prompt-redact` is a small, drop-in service that finds and hides personal
 information in text *before* it reaches a large-language model — or your logs,
