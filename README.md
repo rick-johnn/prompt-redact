@@ -144,3 +144,9 @@ go build -o frontend . && \
 ```
 
 If you switch to the plugin install, delete the vendored copy to avoid drift.
+
+## License
+
+[MIT](LICENSE) — free to use, modify, and self-host, including commercially. The
+software is provided "as is", without warranty; redaction quality and compliance
+fitness are the adopter's responsibility to validate for their deployment.
