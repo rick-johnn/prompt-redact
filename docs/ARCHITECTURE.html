@@ -265,7 +265,7 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
     <tr><td>T8</td><td>Supply-chain compromise of the spaCy model or a Presidio dependency</td><td>Runtime deps are a full <code>--generate-hashes</code> lockfile (<code>requirements.txt</code>, incl. CPU torch) installed <code>--require-hashes</code>; the <code>trf</code> model wheel is SHA256 hash-pinned (<code>requirements-model.txt</code>, <code>--require-hashes --no-deps</code>, its dep <code>spacy-curated-transformers</code> being in the lockfile). Whole image is hash-verified. Air-gapped adopters mirror the model wheel inside the trust boundary and swap the URL — the hash still verifies.</td><td>Mitigated — pin done (deps + model); registry/wheel mirroring is a deployment step</td></tr>
     <tr><td>T9</td><td>DoS via oversized request bodies that explode the NER pass</td><td>Cap request body size; reject above threshold with <code>413</code>; surface metrics on input size distribution</td><td>Open — pick thresholds</td></tr>
     <tr><td>T10</td><td>Token cardinality side-channel — a downstream LLM seeing <code>[PERSON_1]</code> … <code>[PERSON_5]</code> can infer how many distinct people the caller's conversation references</td><td>Accept and document; mitigation (e.g. randomized token IDs) costs LLM reasoning quality. The caller can mitigate further by rotating maps per session.</td><td>Accepted</td></tr>
-    <tr><td>T11</td><td>Sensitive text intercepted on the front-end &harr; Python-sidecar IPC channel introduced by the sidecar topology (<a href="decisions/0001-language-and-topology.html">ADR 0001</a>)</td><td>IPC is loopback-only on a single host — never on the network; require mutual TLS if the two halves are ever split across hosts. Keep the sidecar bound to localhost.</td><td>Open — implementation detail for M1</td></tr>
+    <tr><td>T11</td><td>Sensitive text intercepted on the front-end &harr; Python-sidecar IPC channel introduced by the sidecar topology (<a href="decisions/0001-language-and-topology.html">ADR 0001</a>)</td><td>The sidecar is internal-only: in compose it has no published host port (a negative test asserts it's unreachable from the host); on k8s it is a <code>ClusterIP</code> Service further restricted by a default-deny <code>NetworkPolicy</code> that admits only the front-end (<a href="#k8s-isolation">k8s isolation</a>). Require mutual TLS if the two halves are ever split across hosts.</td><td>Mitigated + tested (compose + k8s)</td></tr>
   </tbody>
 </table>
 
@@ -366,6 +366,23 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
   <li>If they differ, the effective limit is the <strong>smaller</strong>, and a rejection can come from <em>either</em> layer. Prefer <code>front-end&nbsp;&le;&nbsp;sidecar</code> so the edge never forwards a request the sidecar will only reject anyway.</li>
   <li>One cosmetic difference in the reject: the sidecar's 413 body includes a <code>correlation_id</code> (it runs the correlation middleware); the front-end's edge 413 does not. Both use the same <code>{"detail":"request body too large"}</code> shape.</li>
 </ul>
+
+<h3 id="k8s-isolation">Kubernetes manifests &amp; NetworkPolicy isolation (threat T11)</h3>
+<p>Starter manifests live in <a href="../deploy/k8s/"><code>deploy/k8s/</code></a>: a <code>redact</code> namespace, the sidecar (<code>ClusterIP</code> Service, never a NodePort/LoadBalancer/Ingress), the Go front-end, and three <code>NetworkPolicy</code> objects. They mirror the compose topology but add the guarantee compose cannot express — <strong>east-west (pod-to-pod) isolation</strong>:</p>
+<ul>
+  <li><code>default-deny-ingress</code> — nothing in the namespace is reachable unless explicitly allowed.</li>
+  <li><code>allow-frontend-to-sidecar</code> — the sidecar accepts ingress <em>only</em> from the front-end, <em>only</em> on 8000.</li>
+  <li><code>allow-client-to-frontend</code> — the front-end accepts ingress only from designated clients on 8080.</li>
+</ul>
+<p>A <code>NetworkPolicy</code> is only meaningful if the cluster's CNI enforces it (under a non-enforcing CNI it is a silent no-op). <a href="../deploy/k8s/netpol-isolation-test.sh"><code>netpol-isolation-test.sh</code></a> proves enforcement is real and non-vacuous by measuring the <em>same</em> path before and after the policy:</p>
+<pre>
+Phase 1 (no policy):  attacker -> sidecar:8000          REACHABLE   (control)
+Phase 2 (policy on):  sidecar stays Ready under policy   PASS
+                      attacker -> sidecar:8000           BLOCKED     (enforced)
+                      arbitrary client -> sidecar:8000   BLOCKED     (only front-end)
+                      client -> front-end:8080 -> sidecar REACHABLE  (allowed path intact)
+</pre>
+<p>Verified on a local k3d (k3s, which ships a policy-aware CNI) cluster — the REACHABLE&rarr;BLOCKED transition on the attacker path is the actual proof of enforcement; the surviving front-end path confirms the allow-rules are not over-broad. (Still future work: a packaged Helm/Kustomize deploy, resource tuning, and PodSecurity / egress policies.)</p>
 
 <h3>Resolved</h3>
 <p>Primary v1 target: <strong>standalone k8s service</strong> (multiple callers share one deployment) + docker-compose for local dev. This drives the M4 deliverables and the supply-chain row (T8) in the threat model. Sidecar / VM / edge remain documented alternatives an adopter may choose.</p>
