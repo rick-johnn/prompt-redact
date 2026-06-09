@@ -1,0 +1,28 @@
+prompt-redact "{{ .Release.Name }}" is installed in namespace "{{ .Release.Namespace }}".
+
+Components:
+  - front-end (Go reverse proxy)  Service "frontend" :{{ .Values.frontend.service.port }} ({{ .Values.frontend.service.type }})
+  - sidecar  (Presidio + trf)     Service "sidecar"  :{{ .Values.sidecar.service.port }} (ClusterIP, internal only)
+
+The sidecar loads the transformer model at startup (several seconds); the
+front-end waits on its readiness. Watch rollout:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/sidecar
+
+{{- if .Values.networkPolicy.enabled }}
+
+NetworkPolicy isolation is ENABLED (threat T11): default-deny ingress, with the
+sidecar reachable only from the front-end{{ if .Values.networkPolicy.egress.enabled }}, and egress locked down (front-end -> sidecar + DNS only){{ end }}.
+This only takes effect under a policy-enforcing CNI. Verify enforcement with:
+
+  deploy/helm/netpol-isolation-test.sh {{ .Release.Name }} {{ .Release.Namespace }}
+{{- else }}
+
+NetworkPolicy isolation is DISABLED — you are responsible for restricting access
+to the sidecar Service yourself.
+{{- end }}
+
+Try it (port-forward the front-end):
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/frontend {{ .Values.frontend.service.port }}:{{ .Values.frontend.service.port }}
+  curl -s localhost:{{ .Values.frontend.service.port }}/healthz

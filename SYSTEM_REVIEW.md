@@ -129,7 +129,7 @@ Gate **PASSES** with `trf` (leakage 0.003 on the corpus). With `en_core_web_lg` 
 | T6 | Caller mishandles the token map | **Documented** — the map is sensitive; caller's responsibility (encrypt/never log). |
 | T8 | Supply-chain (deps/model) | **Mitigated** — `requirements.txt` is a `--generate-hashes` lockfile (incl. CPU torch); image installs `--require-hashes`. *Remaining:* mirror the model wheel for fully-offline builds. |
 | T9 | Oversized body DoS | **Enforced + tested** — size cap → 413 at both the front-end (edge) and the sidecar (authoritative). |
-| T11 | IPC interception | **Mitigated + tested (compose + k8s)** — sidecar is internal-only: compose has no host port (negative test); k8s adds a default-deny `NetworkPolicy` admitting only the front-end, proven enforced by `deploy/k8s/netpol-isolation-test.sh` (reachable before the policy, blocked after; allowed path intact). |
+| T11 | IPC interception | **Mitigated + tested (compose + k8s)** — sidecar is internal-only: compose has no host port (negative test); the Helm chart (`deploy/helm/prompt-redact/`) adds a default-deny `NetworkPolicy` (ingress + egress) admitting only the front-end, proven enforced by `deploy/helm/netpol-isolation-test.sh` (reachable before the policy, blocked after; allowed path intact under egress lockdown). |
 
 Plus: containers run **non-root**; the sidecar makes **no network calls** while processing input (tldextract pinned offline).
 
@@ -163,7 +163,7 @@ Plus: containers run **non-root**; the sidecar makes **no network calls** while 
 - **Single language (en)** — per-call `language` is validated, not multi-model.
 - **No auth / rate limiting / multi-tenant** — by design, handled by surrounding infra (ADR 0002 non-goals).
 - **Model wheel hash-pinned; mirroring is a deployment step** — the `trf` model wheel is now SHA256-pinned (`requirements-model.txt`, `--require-hashes`) and its dep `spacy-curated-transformers` is in the lockfile, so the whole image is hash-verified. For a *fully air-gapped* build, mirror the wheel inside your trust boundary and swap the URL (the hash still verifies) — that mirroring step is deployment-specific, not shipped.
-- **k8s: starter manifests + proven isolation, not a packaged deploy.** `deploy/k8s/` has the namespace, ClusterIP Services, and NetworkPolicies, with `netpol-isolation-test.sh` proving east-west isolation on k3d/k3s (T11). Still future work: a packaged Helm/Kustomize chart, resource tuning, PodSecurity/egress policies, and a k8s deploy pipeline. CI exists (`.github/workflows/ci.yml`, fail-loud integration job).
+- **k8s: a Helm chart with proven isolation.** `deploy/helm/prompt-redact/` packages the namespace, ClusterIP Services, hardened (non-root, dropped-caps, seccomp) Deployments, and ingress+egress NetworkPolicies, all parameterized via `values.yaml`; `netpol-isolation-test.sh` proves east-west isolation on k3d/k3s (T11). Still future work: publishing the chart to a repo, an HPA/PodDisruptionBudget, and a k8s deploy pipeline. CI exists (`.github/workflows/ci.yml`, fail-loud integration job).
 - **M3 (hybrid regex+NER) parked** — low value with `trf` (PERSON still needs the full NER pass).
 - **`lg` is a build-arg escape hatch only** — not a shipped/tested variant; it fails the recall gate.
 

@@ -1,0 +1,100 @@
+{{- if .Values.networkPolicy.enabled }}
+# East-west isolation (threat T11). Requires a policy-enforcing CNI.
+# Proven non-vacuously by deploy/helm/netpol-isolation-test.sh.
+{{- $egress := .Values.networkPolicy.egress.enabled }}
+# 1. Baseline: deny all ingress to every pod in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "prompt-redact.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# 2. Sidecar accepts ingress ONLY from the front-end, ONLY on its port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-sidecar
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "prompt-redact.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: sidecar
+  policyTypes:
+    - Ingress
+    {{- if $egress }}
+    - Egress
+    {{- end }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - { protocol: TCP, port: {{ .Values.sidecar.service.port }} }
+  {{- if $egress }}
+  # The sidecar serves a baked-in model and never calls out — DNS only.
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+  {{- end }}
+---
+{{- if .Values.networkPolicy.allowedClients }}
+# 3. Front-end accepts ingress only from the configured clients.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-client-to-frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "prompt-redact.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+    - Ingress
+    {{- if $egress }}
+    - Egress
+    {{- end }}
+  ingress:
+    - from:
+        {{- toYaml .Values.networkPolicy.allowedClients | nindent 8 }}
+      ports:
+        - { protocol: TCP, port: {{ .Values.frontend.service.port }} }
+  {{- if $egress }}
+  # The front-end may reach only the sidecar (+ DNS).
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: sidecar
+      ports:
+        - { protocol: TCP, port: {{ .Values.sidecar.service.port }} }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+  {{- end }}
+{{- end }}
+{{- end }}
