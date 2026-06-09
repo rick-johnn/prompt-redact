@@ -367,22 +367,28 @@ POST /unredact { text, token_map } ──▶  for each (token, original) in map:
   <li>One cosmetic difference in the reject: the sidecar's 413 body includes a <code>correlation_id</code> (it runs the correlation middleware); the front-end's edge 413 does not. Both use the same <code>{"detail":"request body too large"}</code> shape.</li>
 </ul>
 
-<h3 id="k8s-isolation">Kubernetes manifests &amp; NetworkPolicy isolation (threat T11)</h3>
-<p>Starter manifests live in <a href="../deploy/k8s/"><code>deploy/k8s/</code></a>: a <code>redact</code> namespace, the sidecar (<code>ClusterIP</code> Service, never a NodePort/LoadBalancer/Ingress), the Go front-end, and three <code>NetworkPolicy</code> objects. They mirror the compose topology but add the guarantee compose cannot express — <strong>east-west (pod-to-pod) isolation</strong>:</p>
+<h3 id="k8s-isolation">Helm chart &amp; NetworkPolicy isolation (threat T11)</h3>
+<p>The k8s deploy is packaged as a Helm chart, <a href="../deploy/helm/prompt-redact/"><code>deploy/helm/prompt-redact/</code></a> — a <code>redact</code> namespace's worth of resources with knobs in <a href="../deploy/helm/prompt-redact/values.yaml"><code>values.yaml</code></a> (image registry/tag/pullPolicy, replicas, the two body-size caps, resource limits, security contexts, and the NetworkPolicy toggles):</p>
+<pre>
+helm install redact deploy/helm/prompt-redact -n redact --create-namespace \
+  --set image.registry=ghcr.io/yourorg
+</pre>
+<p>Both Deployments run <strong>non-root with dropped capabilities, no privilege escalation, and a RuntimeDefault seccomp profile</strong> (the front-end also read-only-rootfs); the sidecar is a <code>ClusterIP</code> Service (never NodePort/LoadBalancer/Ingress). On top of that, three <code>NetworkPolicy</code> objects add the guarantee compose cannot express — <strong>east-west (pod-to-pod) isolation</strong>:</p>
 <ul>
   <li><code>default-deny-ingress</code> — nothing in the namespace is reachable unless explicitly allowed.</li>
   <li><code>allow-frontend-to-sidecar</code> — the sidecar accepts ingress <em>only</em> from the front-end, <em>only</em> on 8000.</li>
-  <li><code>allow-client-to-frontend</code> — the front-end accepts ingress only from designated clients on 8080.</li>
+  <li><code>allow-client-to-frontend</code> — the front-end accepts ingress only from the configured clients on 8080.</li>
 </ul>
-<p>A <code>NetworkPolicy</code> is only meaningful if the cluster's CNI enforces it (under a non-enforcing CNI it is a silent no-op). <a href="../deploy/k8s/netpol-isolation-test.sh"><code>netpol-isolation-test.sh</code></a> proves enforcement is real and non-vacuous by measuring the <em>same</em> path before and after the policy:</p>
+<p>With <code>networkPolicy.egress.enabled</code> (default on), egress is locked down too: the front-end may reach <em>only</em> the sidecar + DNS, and the sidecar (which serves a baked-in model and never calls out) only DNS — containing a compromised component.</p>
+<p>A <code>NetworkPolicy</code> is only meaningful if the cluster's CNI enforces it (under a non-enforcing CNI it is a silent no-op). <a href="../deploy/helm/netpol-isolation-test.sh"><code>netpol-isolation-test.sh</code></a> proves enforcement is real and non-vacuous by installing the chart with the policy <em>off</em>, then toggling it <em>on</em> and measuring the <em>same</em> path before and after:</p>
 <pre>
-Phase 1 (no policy):  attacker -> sidecar:8000          REACHABLE   (control)
+Phase 1 (policy off): attacker -> sidecar:8000          REACHABLE   (control)
 Phase 2 (policy on):  sidecar stays Ready under policy   PASS
+                      client -> front-end:8080 -> sidecar REACHABLE  (allowed path intact)
                       attacker -> sidecar:8000           BLOCKED     (enforced)
                       arbitrary client -> sidecar:8000   BLOCKED     (only front-end)
-                      client -> front-end:8080 -> sidecar REACHABLE  (allowed path intact)
 </pre>
-<p>Verified on a local k3d (k3s, which ships a policy-aware CNI) cluster — the REACHABLE&rarr;BLOCKED transition on the attacker path is the actual proof of enforcement; the surviving front-end path confirms the allow-rules are not over-broad. (Still future work: a packaged Helm/Kustomize deploy, resource tuning, and PodSecurity / egress policies.)</p>
+<p>Verified on a local k3d (k3s, which ships a policy-aware CNI) cluster — the REACHABLE&rarr;BLOCKED transition on the attacker path is the actual proof of enforcement; the surviving front-end path (with egress locked down) confirms the allow-rules are correct and not over-broad. Non-helm users can render plain manifests with <code>helm template</code>. (Still future work: publishing the chart to a repo, and an HPA / PodDisruptionBudget.)</p>
 
 <h3>Resolved</h3>
 <p>Primary v1 target: <strong>standalone k8s service</strong> (multiple callers share one deployment) + docker-compose for local dev. This drives the M4 deliverables and the supply-chain row (T8) in the threat model. Sidecar / VM / edge remain documented alternatives an adopter may choose.</p>

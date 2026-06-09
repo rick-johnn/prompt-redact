@@ -1,0 +1,16 @@
+apiVersion: v2
+name: prompt-redact
+description: On-prem PII/PHI redaction microservice — Go front-end + Python/Presidio sidecar, with default-deny NetworkPolicy isolation.
+type: application
+# Chart version — bump on chart changes. appVersion tracks the service milestone.
+version: 0.1.0
+appVersion: "m4"
+keywords:
+  - pii
+  - phi
+  - redaction
+  - presidio
+  - privacy
+home: https://github.com/rick-johnn/prompt-redact
+sources:
+  - https://github.com/rick-johnn/prompt-redact

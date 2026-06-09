@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sidecar
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "prompt-redact.labels" . | nindent 4 }}
+    app: sidecar
+spec:
+  replicas: {{ .Values.sidecar.replicas }}
+  selector:
+    matchLabels:
+      app: sidecar
+  template:
+    metadata:
+      labels:
+        {{- include "prompt-redact.labels" . | nindent 8 }}
+        app: sidecar
+    spec:
+      {{- include "prompt-redact.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: sidecar
+          image: {{ include "prompt-redact.sidecarImage" . }}
+          imagePullPolicy: {{ .Values.sidecar.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.sidecar.service.port }}
+          env:
+            - name: PROMPT_REDACT_MAX_BODY_BYTES
+              value: {{ .Values.sidecar.maxBodyBytes | int | quote }}
+          startupProbe:
+            httpGet: { path: /healthz, port: {{ .Values.sidecar.service.port }} }
+            periodSeconds: {{ .Values.sidecar.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.sidecar.startupProbe.failureThreshold }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: {{ .Values.sidecar.service.port }} }
+            periodSeconds: 10
+          {{- with .Values.sidecar.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.sidecar.resources | nindent 12 }}
+          {{- if .Values.sidecar.writableTmp }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
+      {{- if .Values.sidecar.writableTmp }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sidecar
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "prompt-redact.labels" . | nindent 4 }}
+    app: sidecar
+spec:
+  type: ClusterIP        # internal only — never NodePort/LoadBalancer
+  selector:
+    app: sidecar
+  ports:
+    - port: {{ .Values.sidecar.service.port }}
+      targetPort: {{ .Values.sidecar.service.port }}
