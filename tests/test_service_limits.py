@@ -30,7 +30,9 @@ def test_oversize_body_413():
     with TestClient(app) as c:
         r = c.post("/redact", json={"text": "x" * 500})
     assert r.status_code == 413
-    assert r.json() == {"detail": "request body too large"}
+    assert r.json()["detail"] == "request body too large"
+    assert r.json()["correlation_id"]  # stamped even on the size-limit reject
+    assert r.headers["X-Correlation-ID"] == r.json()["correlation_id"]
 
 
 def test_body_within_cap_ok():
@@ -67,5 +69,6 @@ def test_unexpected_error_returns_generic_500_without_leaking_input():
     with TestClient(app, raise_server_exceptions=False) as c:
         r = c.post("/redact", json={"text": secret})
     assert r.status_code == 500
-    assert r.json() == {"detail": "internal error"}
+    assert r.json()["detail"] == "internal error"
+    assert r.json()["correlation_id"]
     assert secret not in r.text  # the input must not leak into the response

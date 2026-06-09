@@ -82,7 +82,8 @@ def test_redact_malformed_body_400():
     with _client(fake) as c:
         r = c.post("/redact", json={"token_map": {}})  # missing required "text"
     assert r.status_code == 400
-    assert r.json() == {"detail": "malformed request body"}
+    assert r.json()["detail"] == "malformed request body"
+    assert r.json()["correlation_id"]
 
 
 def test_redact_503_when_not_ready():
