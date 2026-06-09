@@ -35,6 +35,9 @@ python examples/demo_caller.py # exercises a multi-turn round-trip
   </tbody>
 </table>
 
+<p>Error responses are <strong>deliberately generic</strong> — they never echo your input, which may contain PII. To make a failure debuggable anyway, every response carries an <code>X-Correlation-ID</code> header and every error body repeats it as <code>correlation_id</code>. <strong>Quote that ID in a support request</strong> and an operator can find the matching server-side log line, which records the error <em>type and status only</em> — never your content.</p>
+<p>You may set your own <code>X-Correlation-ID</code> (or <code>X-Request-ID</code>) on the request to tie it to your own logs; it is reused as-is when it is log-safe (<code>[A-Za-z0-9._-]</code>, up to 128 chars), otherwise the service substitutes its own. The header is echoed back on success and error alike.</p>
+
 <h2>The token map — your responsibility</h2>
 <ul>
   <li><strong>Hold it for the conversation.</strong> <code>/redact</code> returns the map; store it for the lifetime of the conversation/session.</li>
