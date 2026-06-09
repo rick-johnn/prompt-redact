@@ -81,6 +81,8 @@ What `prompt-redact` adds is the **integration, consistency, and operational lay
 
 Project documentation under `docs/` is authored in HTML, not markdown (see [`CLAUDE.md`](CLAUDE.md#documentation-format)). Markdown is reserved for `README.md`, `CLAUDE.md`, and `skills/*/SKILL.md`.
 
+- [`PITCH.md`](PITCH.md) — the short business/marketing pitch: the value, the proof it's production-hardened, and who it's for
+- [`BUSINESS_OVERVIEW.md`](BUSINESS_OVERVIEW.md) — the business case in depth, with plain-language notes per section
 - [`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) — components, API surface, data flow, token-map handling (FAQ), threat model, redaction quality targets, deployment-target sketch, alternatives, open questions
 - [`docs/PLAN.html`](docs/PLAN.html) — milestones from M0 (design freeze) through MVP and beyond
 - [`docs/CALLER_GUIDE.html`](docs/CALLER_GUIDE.html) — how to integrate: API, error codes, token-map handling, the trust boundary, multi-turn pattern
