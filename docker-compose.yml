@@ -12,6 +12,10 @@ services:
       dockerfile: deploy/sidecar.Dockerfile
     expose:
       - "8000"        # internal only — NOT published to the host
+    environment:
+      # Authoritative body-size cap (threat T9). Kept in sync with the
+      # front-end's edge cap below — see ARCHITECTURE.html#size-caps.
+      PROMPT_REDACT_MAX_BODY_BYTES: "1000000"
     restart: unless-stopped
 
   frontend:
